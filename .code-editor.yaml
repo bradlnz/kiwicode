@@ -1,0 +1,51 @@
+theme: plum
+
+terminal:
+  maximized: true
+
+explorer:
+  max_width_percent: 50
+
+layout:
+  top_menu_padding: 10
+  popup_padding: 1
+  tab_padding: 2
+  sidebar_tab_padding: 2
+  explorer_indent: 2
+
+icons:
+  files: "▤"
+  tests: "✓"
+  source: "⑂"
+  folder_open: "▾"
+  folder_closed: "▸"
+  test_checked: "☑"
+  test_unchecked: "☐"
+
+# Override any 256-color palette role with a value from 0 to 255.
+# colors:
+#   parameter: 215
+#   folder: 183
+#   keyword: 213
+#   top: 53
+
+# Ctrl+I, Ctrl+J, and Ctrl+M are reserved by terminals for Tab/Enter.
+shortcuts:
+  test_explorer: ctrl+e
+  search: ctrl+f
+  function_search: ctrl+u
+  terminal: ctrl+t
+  format: ctrl+k
+  # source_control: ctrl+u
+  diagnostics: ctrl+r
+  graph: ctrl+g
+  files_explorer: ctrl+p
+  explorer: ctrl+b
+  new: ctrl+n
+  save: ctrl+s
+  undo: ctrl+z
+  close: ctrl+w
+  copy: ctrl+c
+  paste: ctrl+v
+  help: ctrl+o
+  quit: ctrl+q

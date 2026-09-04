@@ -1,0 +1,14 @@
+/code-editor
+.agents/
+.codex/
+*.db
+bin/
+obj/
+node_modules/
+npm_modules/
+dist/
+build/
+target/
+coverage/
+__pycache__/
+.venv/
