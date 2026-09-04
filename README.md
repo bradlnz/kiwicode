@@ -123,4 +123,4 @@ kiwicode/
 ./build.sh
 ```
 
-KiwiCode is developed in the open. A formal open-source license is the next repository decision.
+KiwiCode is currently developed in a private repository. Licensing and any public release can be decided later.
