@@ -7,8 +7,8 @@ command_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
 command_path="$command_dir/kiwicode"
 
 cd "$script_dir"
-go test ./...
-go build -o "$binary" .
+go test ./src
+go build -o "$binary" ./src
 
 mkdir -p "$command_dir"
 if [ -L "$command_path" ]; then

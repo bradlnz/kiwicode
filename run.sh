@@ -1,2 +1,2 @@
 #!/bin/sh
-exec go run . "$@"
+exec go run ./src "$@"

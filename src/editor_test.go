@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+func TestMain(m *testing.M) {
+	if filepath.Base(mustCwd()) == "src" {
+		_ = os.Chdir("..")
+	}
+	os.Exit(m.Run())
+}
+
 func TestEditing(t *testing.T) {
 	b := newBuffer("test.txt", []byte("ab\ncd"))
 	b.col = 1
