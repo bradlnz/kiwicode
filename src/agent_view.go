@@ -80,7 +80,11 @@ func (a *agentWorkspace) rebuildView(width int) {
 				state = "applied to buffer; use Save to write disk"
 			}
 			a.viewLines[2] = append(a.viewLines[2], fmt.Sprintf("%d. %s [%s]", i+1, change.Path, state))
-			a.viewLines[2] = append(a.viewLines[2], change.Diff()...)
+			// Wrap, rather than crop, every review line so a narrow terminal
+			// cannot hide a changed suffix that /apply would still accept.
+			for _, line := range change.Diff() {
+				a.viewLines[2] = append(a.viewLines[2], wrapAgentText(line, width, 4096)...)
+			}
 			a.viewLines[2] = append(a.viewLines[2], fmt.Sprintf("/apply %d  ·  /open %d", i+1, i+1), "")
 		}
 		if len(a.viewLines[2]) == 0 {
