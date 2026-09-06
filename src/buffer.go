@@ -42,6 +42,10 @@ type buffer struct {
 }
 
 type bufferSnapshot struct {
+	// replaced < 0 denotes a full-document snapshot for compound edits.
+	// Otherwise lines restores the range beginning at start after removing
+	// replaced lines from the edited buffer.
+	start, replaced            int
 	lines                      [][]rune
 	row, col, scrollY, scrollX int
 	wrapSegment                int
@@ -113,7 +117,7 @@ func (b *buffer) handle(k key) {
 		}
 		b.clampCol()
 	case keyEnter:
-		b.recordUndo()
+		b.recordUndoRange(b.row, b.row+1, 2)
 		before := b.lines[b.row][:b.col]
 		indent := before[:len(before)-len([]rune(strings.TrimLeft(string(before), " \t")))]
 		if strings.ContainsRune("{[(:", lastNonSpace(before)) {
@@ -129,13 +133,13 @@ func (b *buffer) handle(k key) {
 		b.dirty = true
 	case keyBackspace:
 		if b.col > 0 {
-			b.recordUndo()
+			b.recordUndoRange(b.row, b.row+1, 1)
 			line := b.lines[b.row]
 			b.lines[b.row] = append(line[:b.col-1], line[b.col:]...)
 			b.col--
 			b.dirty = true
 		} else if b.row > 0 {
-			b.recordUndo()
+			b.recordUndoRange(b.row-1, b.row+1, 1)
 			previous := len(b.lines[b.row-1])
 			b.lines[b.row-1] = append(b.lines[b.row-1], b.lines[b.row]...)
 			b.lines = append(b.lines[:b.row], b.lines[b.row+1:]...)
@@ -145,12 +149,12 @@ func (b *buffer) handle(k key) {
 		}
 	case keyDelete:
 		if b.col < len(b.lines[b.row]) {
-			b.recordUndo()
+			b.recordUndoRange(b.row, b.row+1, 1)
 			line := b.lines[b.row]
 			b.lines[b.row] = append(line[:b.col], line[b.col+1:]...)
 			b.dirty = true
 		} else if b.row+1 < len(b.lines) {
-			b.recordUndo()
+			b.recordUndoRange(b.row, b.row+2, 1)
 			b.lines[b.row] = append(b.lines[b.row], b.lines[b.row+1]...)
 			b.lines = append(b.lines[:b.row+1], b.lines[b.row+2:]...)
 			b.dirty = true
@@ -177,7 +181,7 @@ func (b *buffer) insert(chars []rune) {
 	if len(chars) == 0 {
 		return
 	}
-	b.recordUndo()
+	b.recordUndoRange(b.row, b.row+1, 1)
 	line := b.lines[b.row]
 	line = append(line, make([]rune, len(chars))...)
 	copy(line[b.col+len(chars):], line[b.col:])
@@ -194,7 +198,7 @@ func (b *buffer) insertText(text string) {
 		b.insert([]rune(text))
 		return
 	}
-	b.recordUndo()
+	b.recordUndoRange(b.row, b.row+1, len(parts))
 	before := append([]rune(nil), b.lines[b.row][:b.col]...)
 	after := append([]rune(nil), b.lines[b.row][b.col:]...)
 	replacement := make([][]rune, len(parts))
@@ -211,28 +215,66 @@ func (b *buffer) insertText(text string) {
 	b.dirty = true
 }
 
+// recordUndo preserves the full-snapshot API used by compound editor operations
+// (selection replacement, clipboard paste and formatting). Ordinary buffer edits
+// use recordUndoRange so typing does not copy every line in the document.
 func (b *buffer) recordUndo() {
+	b.recordUndoRange(0, len(b.lines), -1)
+}
+
+// recordUndoRange records [start, end) before an edit replaces it with
+// replacementCount lines. The saved runes are owned by this entry: subsequent
+// in-place edits cannot mutate earlier undo history.
+func (b *buffer) recordUndoRange(start, end, replacementCount int) {
 	if b.suppressUndo {
 		return
 	}
-	lines := make([][]rune, len(b.lines))
-	for index := range b.lines {
-		lines[index] = append([]rune(nil), b.lines[index]...)
+	lines := make([][]rune, end-start)
+	for index := range lines {
+		lines[index] = append([]rune(nil), b.lines[start+index]...)
 	}
-	b.undo = append(b.undo, bufferSnapshot{lines, b.row, b.col, b.scrollY, b.scrollX, b.wrapSegment, b.dirty})
-	if len(b.undo) > 50 {
-		b.undo = b.undo[len(b.undo)-50:]
+	snapshot := bufferSnapshot{
+		start: start, replaced: replacementCount, lines: lines,
+		row: b.row, col: b.col, scrollY: b.scrollY, scrollX: b.scrollX,
+		wrapSegment: b.wrapSegment, dirty: b.dirty,
 	}
-	// ponytail: snapshots keep undo reliable; replace with edit operations if large-file profiling warrants it.
+	if len(b.undo) == 50 {
+		// Reuse the bounded history rather than retaining discarded entries in
+		// a backing array before the start of a subslice.
+		copy(b.undo, b.undo[1:])
+		b.undo[len(b.undo)-1] = snapshot
+	} else {
+		b.undo = append(b.undo, snapshot)
+	}
 }
 
 func (b *buffer) undoChange() bool {
 	if len(b.undo) == 0 {
 		return false
 	}
-	last := b.undo[len(b.undo)-1]
-	b.undo = b.undo[:len(b.undo)-1]
-	b.lines, b.row, b.col = last.lines, last.row, last.col
+	index := len(b.undo) - 1
+	last := b.undo[index]
+	b.undo[index] = bufferSnapshot{} // Release popped history for GC.
+	b.undo = b.undo[:index]
+	if last.replaced < 0 {
+		b.lines = last.lines
+	} else if len(last.lines) == last.replaced {
+		// The common typing/deletion case does not move untouched line headers.
+		copy(b.lines[last.start:], last.lines)
+	} else {
+		oldLen := len(b.lines)
+		newLen := oldLen - last.replaced + len(last.lines)
+		if newLen > oldLen {
+			b.lines = append(b.lines, make([][]rune, newLen-oldLen)...)
+		}
+		copy(b.lines[last.start+len(last.lines):], b.lines[last.start+last.replaced:oldLen])
+		copy(b.lines[last.start:], last.lines)
+		if newLen < oldLen {
+			clear(b.lines[newLen:])
+			b.lines = b.lines[:newLen]
+		}
+	}
+	b.row, b.col = last.row, last.col
 	b.scrollY, b.scrollX, b.wrapSegment, b.dirty = last.scrollY, last.scrollX, last.wrapSegment, last.dirty
 	return true
 }
@@ -309,7 +351,7 @@ func (b *buffer) ensureVisible(height, width int) {
 type codeViewRow struct{ row, segment int }
 
 func wrapCount(line []rune, width int) int {
-	return max(1, (len(expandLine(line))+width-1)/width)
+	return max(1, (expandedCellWidth(line)+width-1)/width)
 }
 
 func (b *buffer) cursorViewRow(width int) codeViewRow {
@@ -392,7 +434,21 @@ func (b *buffer) wrappedRows(height, width int) []codeViewRow {
 }
 
 func cursorCell(line []rune, col int) int {
-	return len(expandLine(line[:col]))
+	return expandedCellWidth(line[:col])
+}
+
+// expandedCellWidth mirrors expandLine's four-cell tab stops and current
+// one-cell-per-rune convention, without allocating a rendered copy of the line.
+func expandedCellWidth(line []rune) int {
+	cell := 0
+	for _, r := range line {
+		if r == '\t' {
+			cell += 4 - cell%4
+		} else {
+			cell++
+		}
+	}
+	return cell
 }
 
 func runeColAtCell(line []rune, target int) int {
