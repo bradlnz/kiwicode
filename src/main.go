@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -28,7 +32,6 @@ func run() error {
 		}
 	}
 	configErr := loadSettings()
-
 	state, err := stty("-g")
 	if err != nil {
 		return fmt.Errorf("a terminal is required")
@@ -37,11 +40,12 @@ func run() error {
 		return err
 	}
 	defer stty(strings.TrimSpace(string(state)))
-	fmt.Print("\x1b[?1049h\x1b[?25l" + mouseOn)
-	defer fmt.Print(mouseOff + "\x1b[?25h\x1b[?1049l")
+	fmt.Print("\x1b[?1049h\x1b[?25l" + mouseOn + bracketedPasteOn)
+	defer fmt.Print(bracketedPasteOff + mouseOff + "\x1b[?25h\x1b[?1049l")
 
 	e := loadEditorAsync()
 	defer func() {
+		e.closeAgent()
 		if e.workspaceDone == nil {
 			_ = e.saveState()
 		}
@@ -49,41 +53,107 @@ func run() error {
 	if configErr != nil {
 		e.status = "Config: " + configErr.Error()
 	}
+	resized := make(chan os.Signal, 1)
+	signal.Notify(resized, syscall.SIGWINCH)
+	defer signal.Stop(resized)
 	e.resize()
 	e.draw()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	input, inputDone := readInput(ctx, os.Stdin)
+	defer func() { cancel(); <-inputDone }()
+	maintenance := time.NewTicker(50 * time.Millisecond)
+	defer maintenance.Stop()
+	// At most one scheduled frame. Never reset the deadline when new data
+	// arrives: continuous token/input traffic must not postpone rendering.
+	var frames frameSchedule
+	defer frames.stop()
 	for {
-		k, ok := readKey()
-		if !ok {
-			workspaceDone, workspaceErr := e.pollWorkspace()
-			if workspaceDone && workspaceErr != nil {
-				e.status = "State: " + workspaceErr.Error()
-			} else if workspaceDone && configErr != nil {
-				e.status = "Config: " + configErr.Error()
+		changed := false
+		select {
+		case event, ok := <-input:
+			if !ok {
+				return nil
 			}
-			completionDone := e.pollCompletion()
-			definitionDone := e.pollDefinition()
-			sourceDone := e.pollSourceControl()
-			shellDone := e.shell.poll()
-			if shellDone && e.sourceRefresh {
-				e.sourceRefresh = false
-				e.refreshFiles()
-				e.reloadCleanBuffers()
+			if event.err != nil {
+				e.status = event.err.Error()
+			} else if event.isPaste {
+				e.handlePaste(event.paste)
+			} else if e.handle(event.key) {
+				return nil
 			}
-			if shellDone && e.debugging {
-				e.finishDebug()
-			}
-			if workspaceDone || shellDone || completionDone || definitionDone || sourceDone {
-				e.draw()
-			}
-			continue
+			changed = true
+		case <-resized:
+			e.resize() // only startup and actual resize notifications
+			changed = true
+		case event, ok := <-e.agentEvents():
+			changed = e.receiveAgent(event, ok)
+		case now := <-maintenance.C:
+			changed = e.pollEditor(configErr)
+			changed = e.checkpointAgent(now, false) || changed
+		case <-frames.channel():
+			frames.fired()
+			e.draw()
 		}
-		if e.handle(k) {
-			return nil
+		if changed {
+			frames.request()
 		}
-		e.resize()
-		e.draw()
 	}
+}
+
+const frameInterval = 16 * time.Millisecond
+
+type frameSchedule struct {
+	timer   *time.Timer
+	pending bool
+	last    time.Time
+}
+
+func (f *frameSchedule) request() {
+	if f.pending {
+		return
+	}
+	delay := max(time.Duration(0), time.Until(f.last.Add(frameInterval)))
+	if f.timer == nil {
+		f.timer = time.NewTimer(delay)
+	} else {
+		f.timer.Reset(delay)
+	}
+	f.pending = true
+}
+func (f *frameSchedule) channel() <-chan time.Time {
+	if !f.pending {
+		return nil
+	}
+	return f.timer.C
+}
+func (f *frameSchedule) fired() { f.pending = false; f.last = time.Now() }
+func (f *frameSchedule) stop() {
+	if f.timer != nil {
+		f.timer.Stop()
+	}
+}
+
+func (e *editor) pollEditor(configErr error) bool {
+	workspaceDone, workspaceErr := e.pollWorkspace()
+	if workspaceDone && workspaceErr != nil {
+		e.status = "State: " + workspaceErr.Error()
+	} else if workspaceDone && configErr != nil {
+		e.status = "Config: " + configErr.Error()
+	}
+	completionDone := e.pollCompletion()
+	definitionDone := e.pollDefinition()
+	sourceDone := e.pollSourceControl()
+	shellDone := e.shell.poll()
+	if shellDone && e.sourceRefresh {
+		e.sourceRefresh = false
+		e.refreshFiles()
+		e.reloadCleanBuffers()
+	}
+	if shellDone && e.debugging {
+		e.finishDebug()
+	}
+	return workspaceDone || shellDone || completionDone || definitionDone || sourceDone
 }
 
 type editorLoad struct {
@@ -96,24 +166,17 @@ func loadEditorAsync() *editor {
 	e.startWorkspaceLoad("Loading workspace…")
 	return e
 }
-
 func (e *editor) startWorkspaceLoad(status string) {
 	rows, cols := e.rows, e.cols
 	done := make(chan editorLoad, 1)
-	*e = editor{
-		buffers:       []*buffer{newBuffer(untitledName(), nil)},
-		collapsed:     map[string]bool{},
-		status:        status,
-		rows:          rows,
-		cols:          cols,
-		workspaceDone: done,
-	}
+	*e = editor{buffers: []*buffer{newBuffer(untitledName(), nil)}, collapsed: map[string]bool{}, status: status, rows: rows, cols: cols, workspaceDone: done}
 	go func() {
 		loaded := newEditor()
-		done <- editorLoad{loaded, loaded.restoreState()}
+		err := loaded.restoreState()
+		loaded.restoreAgent()
+		done <- editorLoad{loaded, err}
 	}()
 }
-
 func (e *editor) pollWorkspace() (bool, error) {
 	if e.workspaceDone == nil {
 		return false, nil
@@ -121,6 +184,7 @@ func (e *editor) pollWorkspace() (bool, error) {
 	select {
 	case loaded := <-e.workspaceDone:
 		rows, cols := e.rows, e.cols
+		workspace, earlyAgent := e.workspace, e.agent
 		var edited []*buffer
 		for _, b := range e.buffers {
 			if b.dirty {
@@ -128,7 +192,14 @@ func (e *editor) pollWorkspace() (bool, error) {
 			}
 		}
 		*e = *loaded.editor
-		e.rows, e.cols = rows, cols
+		e.rows, e.cols, e.workspace = rows, cols, workspace
+		// A draft typed while indexing must not be replaced by restored history.
+		if earlyAgent != nil && (earlyAgent.dirty || earlyAgent.forget || e.agent == nil) {
+			e.agent = earlyAgent
+		}
+		if e.agent != nil {
+			e.ensureAgent()
+		}
 		if e.restoredTheme != "" && !strings.EqualFold(e.restoredTheme, colors.name) {
 			setColorScheme(strings.ToLower(e.restoredTheme))
 		}
@@ -141,7 +212,6 @@ func (e *editor) pollWorkspace() (bool, error) {
 		return false, nil
 	}
 }
-
 func stty(args ...string) ([]byte, error) {
 	cmd := exec.Command("stty", args...)
 	cmd.Stdin = os.Stdin
