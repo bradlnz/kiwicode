@@ -86,6 +86,8 @@ func run() error {
 		case <-resized:
 			e.resize() // only startup and actual resize notifications
 			changed = true
+		case view := <-e.contextEvents():
+			changed = e.receiveContext(view)
 		case event, ok := <-e.agentEvents():
 			changed = e.receiveAgent(event, ok)
 		case now := <-maintenance.C:

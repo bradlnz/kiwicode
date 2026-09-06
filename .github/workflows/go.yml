@@ -19,6 +19,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Archive exact tracked source
+        run: git archive --format=tar.gz --output=source-snapshot.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: source-snapshot.tar.gz
+          retention-days: 1
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -38,4 +45,4 @@ jobs:
       - name: Component performance baselines
         env:
           GOMAXPROCS: '2'
-        run: go test ./... -run '^$' -bench 'Benchmark(Agent|Input|Frame|Log|VisibleLog|Buffer)' -benchmem -benchtime=200ms -count=3
+        run: go test ./... -run '^$' -bench 'Benchmark(Agent|Input|Frame|Log|VisibleLog|Buffer|Analyze)' -benchmem -benchtime=200ms -count=3

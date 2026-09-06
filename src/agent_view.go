@@ -45,7 +45,7 @@ func wrapAgentText(text string, width, limit int) []string {
 func (a *agentWorkspace) rebuildView(width int) {
 	if a.width != width {
 		a.width = width
-		a.viewDirty = [4]bool{true, true, true, true}
+		a.viewDirty = [agent.ViewCount]bool{true, true, true, true, true, true, true}
 		a.approvalLines = nil
 	}
 	if a.approval != nil && a.approvalLines == nil {
@@ -97,8 +97,21 @@ func (a *agentWorkspace) rebuildView(width int) {
 			header := fmt.Sprintf("Check %d · exit %d · %s", i+1, check.ExitCode, argv)
 			a.viewLines[3] = append(a.viewLines[3], wrapAgentText(header+"\n"+check.Output+"\n"+check.Error, width, 8192)...)
 		}
+		for _, check := range a.memoryView.Session.Checks {
+			header := fmt.Sprintf("Context snapshot check · exit %d · %s", check.ExitCode, strings.Join(check.Command, " "))
+			a.viewLines[3] = append(a.viewLines[3], wrapAgentText(header+"\n"+check.Output+"\n"+check.Error, width, 8192)...)
+		}
 		if len(a.viewLines[3]) == 0 {
 			a.viewLines[3] = []string{"No checks have run.", "Host commands are disabled unless KIWICODE_AGENT_ALLOW_COMMANDS=1.", "Each command requires approval; a snapshot is NOT a security sandbox."}
+		}
+	case 4, 5, 6:
+		a.viewLines[view] = nil
+		for _, line := range a.contextLines(view) {
+			a.viewLines[view] = append(a.viewLines[view], wrapAgentText(line, width, 512)...)
+			if len(a.viewLines[view]) >= 8192 {
+				a.viewLines[view] = a.viewLines[view][:8192]
+				break
+			}
 		}
 	}
 	a.viewDirty[view] = false
@@ -135,7 +148,10 @@ func (e *editor) agentFrame() string {
 	row(1, " KiwiCode · AGENT  |  Ctrl+A files  Ctrl+X cancel  Ctrl+Q quit")
 	writeCell(&out, 2, 1, e.workspaceTabs(width))
 	var tabs strings.Builder
-	for i, name := range []string{"Plan", "Activity", "Changes", "Checks"} {
+	visible := max(1, width/12)
+	a.viewTabStart = max(0, a.session.View-visible+1)
+	for i := a.viewTabStart; i < min(agent.ViewCount, a.viewTabStart+visible); i++ {
+		name := agentViewNames[i]
 		tabs.WriteString(style(a.session.View == i, "\x1b[1;4m"+ansiFG(colors.accent), "\x1b[22;24m"+ansiFG(colors.muted)) + fit(" "+name, 12))
 	}
 	writeCell(&out, 3, 1, fitANSI(tabs.String()+"\x1b[22;24m", width))
