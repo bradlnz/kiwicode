@@ -29,6 +29,12 @@ func (e *editor) agentSlash(text string) bool {
 	}
 	switch fields[0] {
 	case "/run":
+		// A non-nil run after submitAgent is not proof that a new task started.
+		// Reject before replacing the draft so an existing run cannot erase it.
+		if e.agentRunning() {
+			e.status = "A run is active; /cancel to stop it. Task draft retained"
+			return false
+		}
 		task := strings.TrimSpace(strings.TrimPrefix(text, "/run"))
 		if task == "" {
 			task = a.memoryView.Session.Task
@@ -121,13 +127,25 @@ func (e *editor) agentSlash(text string) bool {
 			e.status = "Cancel the run before forgetting history"
 			return false
 		}
+		// /forget must remove previous checkpoints even when automatic history
+		// persistence is now disabled. Resolve the path before clearing anything.
+		var historyPath string
+		if a.store == nil {
+			var err error
+			historyPath, err = agent.SessionPath(a.root)
+			if err != nil {
+				e.status = agentStatus("Cannot forget history: %v", err)
+				return false
+			}
+		}
 		if a.memory != nil && !a.memory.Submit(contextgraph.Request{Kind: "forget"}) {
 			e.status = "Context unavailable; nothing cleared"
 			return false
 		}
-		if a.store != nil {
-			a.store.Queue(nil)
+		if a.store == nil {
+			a.store = agent.NewStore(historyPath)
 		}
+		a.store.Queue(nil)
 		a.session = agent.NewSession()
 		a.viewLines, a.activityRows = [agent.ViewCount][]string{}, agent.Log{}
 		a.follow = true

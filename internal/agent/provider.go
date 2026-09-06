@@ -122,7 +122,7 @@ func readStream(reader io.Reader, onText func(string) error) (Message, error) {
 	scanner := bufio.NewScanner(io.LimitReader(reader, MaxResponseBytes+1))
 	scanner.Buffer(make([]byte, 4096), MaxResponseBytes+1)
 	var text strings.Builder
-	calls := make(map[int]Call)
+	calls := make(map[int]*streamCallBuffer)
 	total := 0
 	finished := false
 	done := false
@@ -171,14 +171,15 @@ func readStream(reader io.Reader, onText func(string) error) (Message, error) {
 					return Message{}, errors.New("too many tool calls in one turn")
 				}
 				call := calls[delta.Index]
-				call.ID += delta.ID
-				call.Type += delta.Type
-				call.Function.Name += delta.Function.Name
-				call.Function.Arguments += delta.Function.Arguments
-				if len(call.ID) > 256 || len(call.Type) > 32 || len(call.Function.Name) > 64 || len(call.Function.Arguments) > MaxFileBytes*2 {
-					return Message{}, errors.New("tool call exceeds limit")
+				if call == nil {
+					call = &streamCallBuffer{}
+					calls[delta.Index] = call
 				}
-				calls[delta.Index] = call
+				// Check before growing. Builders append fragments without copying
+				// every preceding argument byte on every streamed delta.
+				if err := call.append(delta); err != nil {
+					return Message{}, err
+				}
 			}
 			if choice.FinishReason != nil {
 				if *choice.FinishReason != "stop" && *choice.FinishReason != "tool_calls" {
@@ -197,12 +198,36 @@ func readStream(reader io.Reader, onText func(string) error) (Message, error) {
 	result := Message{Role: "assistant", Content: text.String()}
 	ids := map[string]bool{}
 	for i := 0; i < len(calls); i++ {
-		call, ok := calls[i]
-		if !ok || call.ID == "" || call.Type != "function" || call.Function.Name == "" || !json.Valid([]byte(call.Function.Arguments)) || ids[call.ID] {
+		buffer, ok := calls[i]
+		if !ok {
+			return Message{}, errors.New("incomplete or duplicate tool call")
+		}
+		call := buffer.message()
+		if call.ID == "" || call.Type != "function" || call.Function.Name == "" || !json.Valid([]byte(call.Function.Arguments)) || ids[call.ID] {
 			return Message{}, errors.New("incomplete or duplicate tool call")
 		}
 		ids[call.ID] = true
 		result.ToolCalls = append(result.ToolCalls, call)
 	}
 	return result, nil
+}
+
+// Each buffer is pointer-owned: a strings.Builder must not be copied after use.
+type streamCallBuffer struct {
+	id, kind, name, arguments strings.Builder
+}
+
+func (b *streamCallBuffer) append(delta streamCall) error {
+	if b.id.Len()+len(delta.ID) > 256 || b.kind.Len()+len(delta.Type) > 32 || b.name.Len()+len(delta.Function.Name) > 64 || b.arguments.Len()+len(delta.Function.Arguments) > MaxFileBytes*2 {
+		return errors.New("tool call exceeds limit")
+	}
+	b.id.WriteString(delta.ID)
+	b.kind.WriteString(delta.Type)
+	b.name.WriteString(delta.Function.Name)
+	b.arguments.WriteString(delta.Function.Arguments)
+	return nil
+}
+
+func (b *streamCallBuffer) message() Call {
+	return Call{ID: b.id.String(), Type: b.kind.String(), Function: FunctionCall{Name: b.name.String(), Arguments: b.arguments.String()}}
 }
