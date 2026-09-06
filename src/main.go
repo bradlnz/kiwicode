@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 func main() {
@@ -28,7 +30,6 @@ func run() error {
 		}
 	}
 	configErr := loadSettings()
-
 	state, err := stty("-g")
 	if err != nil {
 		return fmt.Errorf("a terminal is required")
@@ -50,39 +51,51 @@ func run() error {
 		e.status = "Config: " + configErr.Error()
 	}
 	e.resize()
-	e.draw()
+	workspace := newAgentWorkspace(e)
+	defer workspace.close()
+	resizes := make(chan os.Signal, 1)
+	signal.Notify(resizes, syscall.SIGWINCH)
+	defer signal.Stop(resizes)
+	workspace.draw()
 
 	for {
 		k, ok := readKey()
-		if !ok {
-			workspaceDone, workspaceErr := e.pollWorkspace()
-			if workspaceDone && workspaceErr != nil {
-				e.status = "State: " + workspaceErr.Error()
-			} else if workspaceDone && configErr != nil {
-				e.status = "Config: " + configErr.Error()
-			}
-			completionDone := e.pollCompletion()
-			definitionDone := e.pollDefinition()
-			sourceDone := e.pollSourceControl()
-			shellDone := e.shell.poll()
-			if shellDone && e.sourceRefresh {
-				e.sourceRefresh = false
-				e.refreshFiles()
-				e.reloadCleanBuffers()
-			}
-			if shellDone && e.debugging {
-				e.finishDebug()
-			}
-			if workspaceDone || shellDone || completionDone || definitionDone || sourceDone {
-				e.draw()
-			}
-			continue
+		redraw := false
+		select {
+		case <-resizes:
+			e.resize()
+			redraw = true
+		default:
 		}
-		if e.handle(k) {
+		// Poll workers even during continuous typing; idle-only polling starves them.
+		workspaceDone, workspaceErr := e.pollWorkspace()
+		if workspaceDone {
+			workspace.syncRoot()
+		}
+		if workspaceDone && workspaceErr != nil {
+			e.status = "State: " + workspaceErr.Error()
+		} else if workspaceDone && configErr != nil {
+			e.status = "Config: " + configErr.Error()
+		}
+		completionDone := e.pollCompletion()
+		definitionDone := e.pollDefinition()
+		sourceDone := e.pollSourceControl()
+		shellDone := e.shell.poll()
+		if shellDone && e.sourceRefresh {
+			e.sourceRefresh = false
+			e.refreshFiles()
+			e.reloadCleanBuffers()
+		}
+		if shellDone && e.debugging {
+			e.finishDebug()
+		}
+		agentDone := workspace.poll()
+		if ok && workspace.handle(k) {
 			return nil
 		}
-		e.resize()
-		e.draw()
+		if ok || redraw || workspaceDone || shellDone || completionDone || definitionDone || sourceDone || agentDone {
+			workspace.draw()
+		}
 	}
 }
 
@@ -96,24 +109,12 @@ func loadEditorAsync() *editor {
 	e.startWorkspaceLoad("Loading workspace…")
 	return e
 }
-
 func (e *editor) startWorkspaceLoad(status string) {
 	rows, cols := e.rows, e.cols
 	done := make(chan editorLoad, 1)
-	*e = editor{
-		buffers:       []*buffer{newBuffer(untitledName(), nil)},
-		collapsed:     map[string]bool{},
-		status:        status,
-		rows:          rows,
-		cols:          cols,
-		workspaceDone: done,
-	}
-	go func() {
-		loaded := newEditor()
-		done <- editorLoad{loaded, loaded.restoreState()}
-	}()
+	*e = editor{buffers: []*buffer{newBuffer(untitledName(), nil)}, collapsed: map[string]bool{}, status: status, rows: rows, cols: cols, workspaceDone: done}
+	go func() { loaded := newEditor(); done <- editorLoad{loaded, loaded.restoreState()} }()
 }
-
 func (e *editor) pollWorkspace() (bool, error) {
 	if e.workspaceDone == nil {
 		return false, nil
@@ -141,7 +142,6 @@ func (e *editor) pollWorkspace() (bool, error) {
 		return false, nil
 	}
 }
-
 func stty(args ...string) ([]byte, error) {
 	cmd := exec.Command("stty", args...)
 	cmd.Stdin = os.Stdin
