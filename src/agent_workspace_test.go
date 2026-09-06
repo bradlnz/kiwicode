@@ -19,6 +19,7 @@ import (
 func agentTestEditor(t *testing.T) *editor {
 	t.Helper()
 	t.Setenv("KIWICODE_AGENT_HISTORY", "0")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := t.TempDir()
 	path := filepath.Join(root, "sample.txt")
 	if err := os.WriteFile(path, []byte("before\n"), 0600); err != nil {
@@ -26,6 +27,13 @@ func agentTestEditor(t *testing.T) *editor {
 	}
 	e := &editor{buffers: []*buffer{newBuffer(path, []byte("before\n"))}, files: []string{"sample.txt"}, rows: 30, cols: 100, agent: newAgentWorkspace(root)}
 	t.Cleanup(e.closeAgent)
+	e.ensureAgent()
+	select {
+	case v := <-e.contextEvents():
+		e.receiveContext(v)
+	case <-time.After(5 * time.Second):
+		t.Fatal("context did not load")
+	}
 	return e
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-editor/internal/agent"
+	"code-editor/internal/contextgraph"
 	"context"
 	"errors"
 	"fmt"
@@ -23,26 +24,30 @@ const (
 )
 
 type agentWorkspace struct {
-	root      string
-	session   agent.Session
-	input     []rune
-	cursor    int
-	run       *agent.Run
-	provider  *agent.HTTPProvider
-	approval  *agent.Approval
-	store     *agent.Store
-	unread    bool
-	dirty     bool
-	lastSaved time.Time
-	forget    bool
-	newArmed  bool
+	memory                  *contextgraph.Service
+	memoryView              contextgraph.View
+	memoryReady, checkArmed bool
+	viewTabStart            int
+	root                    string
+	session                 agent.Session
+	input                   []rune
+	cursor                  int
+	run                     *agent.Run
+	provider                *agent.HTTPProvider
+	approval                *agent.Approval
+	store                   *agent.Store
+	unread                  bool
+	dirty                   bool
+	lastSaved               time.Time
+	forget                  bool
+	newArmed                bool
 	// Presentation caches rebuild on changes or resize, never on every frame.
 	width         int
 	activityRows  agent.Log
 	follow        bool
 	pageRows      int
-	viewLines     [4][]string
-	viewDirty     [4]bool
+	viewLines     [agent.ViewCount][]string
+	viewDirty     [agent.ViewCount]bool
 	approvalLines []string
 	approvalTop   int
 }
@@ -56,7 +61,7 @@ func init() {
 }
 
 func newAgentWorkspace(root string) *agentWorkspace {
-	return &agentWorkspace{root: root, session: agent.NewSession(), follow: true, viewDirty: [4]bool{true, true, true, true}}
+	return &agentWorkspace{root: root, session: agent.NewSession(), follow: true, viewDirty: [agent.ViewCount]bool{true, true, true, true, true, true, true}}
 }
 
 // Only the workspace loader calls this. No history read or JSON decoding runs
@@ -86,6 +91,9 @@ func (e *editor) ensureAgent() *agentWorkspace {
 		e.agent = newAgentWorkspace(mustCwd())
 	}
 	a := e.agent
+	if a.memory == nil && e.workspaceDone == nil {
+		a.memory = contextgraph.Start(a.root, "")
+	}
 	if a.store == nil && os.Getenv("KIWICODE_AGENT_HISTORY") == "1" && e.workspaceDone == nil {
 		if path, err := agent.SessionPath(a.root); err == nil {
 			a.store = agent.NewStore(path)
@@ -109,15 +117,21 @@ func (e *editor) activateAgent() {
 	e.quitArmed = false
 }
 
-func (e *editor) agentRunning() bool { return e.agent != nil && e.agent.run != nil }
+func (e *editor) agentRunning() bool {
+	return e.agent != nil && (e.agent.run != nil || e.agent.memoryBusy())
+}
 
 func (e *editor) cancelAgent() {
-	if e.agentRunning() {
-		e.agent.run.Cancel()
-		e.status = "Cancelling agent…"
-	} else {
-		e.status = "No agent run is active"
+	if e.agent != nil {
+		if e.agent.run != nil {
+			e.agent.run.Cancel()
+		}
+		if e.agent.memory != nil {
+			e.agent.memory.Cancel()
+		}
+		e.agent.checkArmed = false
 	}
+	e.status = "Cancellation requested"
 }
 
 // agentCommand runs before file command dispatch. It cannot save, format,
@@ -177,6 +191,9 @@ func (e *editor) handleAgent(k key) bool {
 		return false
 	}
 	a := e.ensureAgent()
+	if k.code != keyEnter {
+		a.checkArmed = false
+	}
 	action := shortcutAction(k.r)
 	if action != "quit" {
 		e.quitArmed = false
@@ -190,7 +207,7 @@ func (e *editor) handleAgent(k key) bool {
 	}
 	switch k.code {
 	case keyTab:
-		a.session.View = (a.session.View + 1) % 4
+		a.session.View = (a.session.View + 1) % agent.ViewCount
 		a.dirty = true
 	case keyUp, keyDown, keyPageUp, keyPageDown:
 		delta := 1
@@ -231,6 +248,7 @@ func (e *editor) handleAgent(k key) bool {
 }
 
 func (a *agentWorkspace) edited() {
+	a.checkArmed = false
 	a.session.Draft = string(a.input)
 	a.dirty = true
 	a.forget = false
@@ -295,6 +313,16 @@ func (e *editor) submitAgent() {
 		e.status = "Agent unavailable: configure KIWICODE_AGENT_ENDPOINT and KIWICODE_AGENT_MODEL; " + err.Error()
 		return
 	}
+	if a.memory != nil && (!a.memoryReady || a.memoryBusy()) {
+		p.Close()
+		e.status = "Context is loading or working; task draft retained"
+		return
+	}
+	if a.memoryView.Error != "" {
+		p.Close()
+		e.status = "Resolve the context-store error before starting a run"
+		return
+	}
 	// No file text is included at launch. Each read requires explicit approval;
 	// initial dirty paths are blocked, and apply rechecks all intervening edits.
 	var blocked []string
@@ -306,20 +334,24 @@ func (e *editor) submitAgent() {
 		}
 	}
 	a.provider = p
+	history := a.session.History
+	if a.memoryView.ProviderContext != "" {
+		history = append([]agent.Message{{Role: "user", Content: "Untrusted saved notes and included graph metadata; not read/command approval:\n" + a.memoryView.ProviderContext}}, history[max(0, len(history)-15):]...)
+	}
 	a.run = agent.Start(context.Background(), agent.Request{
 		Root: a.root, Prompt: text, Files: e.files, BlockedPaths: blocked,
-		History: a.session.History, AllowCommands: os.Getenv("KIWICODE_AGENT_ALLOW_COMMANDS") == "1",
+		History: history, AllowCommands: os.Getenv("KIWICODE_AGENT_ALLOW_COMMANDS") == "1",
 	}, p)
 	a.session.Plan, a.session.Changes, a.session.Checks = nil, nil, nil
-	a.viewLines = [4][]string{}
+	a.viewLines = [agent.ViewCount][]string{}
 	a.session.Remember("user", text)
 	a.session.Log.Add("Task: " + text)
 	a.session.State = agent.Running
 	a.session.View = 1
-	a.session.Scroll = [4]int{}
+	a.session.Scroll = [agent.ViewCount]int{}
 	a.follow = true
 	a.input, a.cursor, a.session.Draft = nil, 0, ""
-	a.viewDirty = [4]bool{true, true, true, true}
+	a.viewDirty = [agent.ViewCount]bool{true, true, true, true, true, true, true}
 	a.dirty, a.forget, a.newArmed = true, false, false
 	e.status = "Agent running; reads require approval. Ctrl+X cancels from any tab"
 }
@@ -337,8 +369,8 @@ func workspaceRelative(root, path string) (string, error) {
 
 func (e *editor) applyAgentChange(index int) error {
 	a := e.ensureAgent()
-	if a.run != nil {
-		return errors.New("wait for the run to stop before applying changes")
+	if a.run != nil || a.memoryBusy() {
+		return errors.New("wait for the run/context operation to stop before applying changes")
 	}
 	if index < 0 || index >= len(a.session.Changes) {
 		return errors.New("invalid change")
@@ -404,7 +436,7 @@ func (e *editor) applyAgentChange(index int) error {
 }
 
 func (e *editor) agentEvents() <-chan agent.Event {
-	if !e.agentRunning() {
+	if e.agent == nil || e.agent.run == nil {
 		return nil
 	}
 	return e.agent.run.Events
@@ -500,6 +532,12 @@ func (e *editor) closeAgent() {
 		a.provider.Close()
 		a.provider = nil
 	}
+	if a.memory != nil {
+		if err := a.memory.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "context:", err)
+		}
+		a.memory = nil
+	}
 	e.checkpointAgent(time.Now(), true)
 	if a.store != nil {
 		a.store.Close()
@@ -516,7 +554,7 @@ func (e *editor) workspaceTabs(width int) string {
 		switch {
 		case e.agent.approval != nil:
 			label += " !"
-		case e.agent.run != nil:
+		case e.agent.run != nil || e.agent.memoryBusy():
 			label += " ~"
 		case e.agent.unread:
 			label += " *"
@@ -562,8 +600,8 @@ func (e *editor) handleAgentMouse(k key) {
 		return
 	}
 	if k.y == 3 {
-		view := (k.x - 1) / 12
-		if view >= 0 && view < 4 {
+		view := e.ensureAgent().viewTabStart + (k.x-1)/12
+		if view >= 0 && view < agent.ViewCount {
 			e.ensureAgent().session.View = view
 			e.agent.dirty = true
 		}

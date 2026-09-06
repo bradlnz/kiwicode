@@ -1,139 +1,161 @@
-package agent
+package contextgraph
 
 import (
- "context"
- "encoding/json"
- "net/http"
- "net/http/httptest"
- "os"
- "path/filepath"
- "strings"
- "testing"
- "time"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
 )
 
-type providerFunc func(context.Context, []Message) (Message, error)
-func (f providerFunc) Complete(c context.Context, m []Message) (Message, error) { return f(c, m) }
 func waitReady(t *testing.T, s *Service) View {
- t.Helper()
- timer := time.NewTimer(5*time.Second)
- defer timer.Stop()
- for {
-  select {
-  case v := <-s.Events():
-   if !v.Busy { return v }
-  case <-timer.C:
-   t.Fatal("service did not become ready")
-   return View{}
-  }
- }
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case v := <-s.Events():
+			if !v.Busy {
+				return v
+			}
+		case <-timer.C:
+			t.Fatal("context service did not finish")
+			return View{}
+		}
+	}
 }
 func submitWait(t *testing.T, s *Service, r Request) View {
- t.Helper()
- if !s.Submit(r) { t.Fatalf("submit rejected: %+v", r) }
- return waitReady(t, s)
+	t.Helper()
+	if !s.Submit(r) {
+		t.Fatalf("rejected %+v", r)
+	}
+	return waitReady(t, s)
 }
-func TestContextPersistsWithoutReplaying(t *testing.T) {
- root, home := t.TempDir(), t.TempDir()
- p := providerFunc(func(context.Context, []Message) (Message, error) {
-  t.Error("restore called provider")
-  return Message{}, nil
- })
- s := Start(root, home, p)
- waitReady(t, s)
- submitWait(t, s, Request{"remember", "Keep Go and benchmark every change"})
- submitWait(t, s, Request{"task", "Improve typing latency"})
- s.SetDraft("unsent draft")
- if err := s.Close(); err != nil { t.Fatal(err) }
- s = Start(root, home, p)
- defer s.Close()
- v := waitReady(t, s)
- if v.Session.Draft != "unsent draft" || v.Session.Task != "Improve typing latency" || len(v.Session.Notes) != 1 { t.Fatalf("lost context: %+v", v.Session) }
+func TestContextPersistsWithoutModelRuntime(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(root, "main.go"), sourceWithBranches(0), 0600)
+	s := Start(root, home)
+	waitReady(t, s)
+	submitWait(t, s, Request{"remember", "Keep Go and measure allocations"})
+	submitWait(t, s, Request{"task", "Improve typing latency"})
+	submitWait(t, s, Request{"include", "main.go"})
+	v := submitWait(t, s, Request{"index", ""})
+	if v.Error != "" || v.GraphFiles != 1 {
+		t.Fatalf("index: %+v", v)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = Start(root, home)
+	defer s.Close()
+	v = waitReady(t, s)
+	if v.Session.Task != "Improve typing latency" || len(v.Session.Notes) != 1 || v.GraphFiles != 1 {
+		t.Fatalf("lost context: %+v", v)
+	}
+	if !strings.Contains(v.ProviderContext, "Keep Go") || !strings.Contains(v.ProviderContext, "main.go") {
+		t.Fatal("provider context omitted approved metadata")
+	}
+	if strings.Contains(v.ProviderContext, "return x") {
+		t.Fatal("raw source included implicitly")
+	}
+	v = submitWait(t, s, Request{"run", "not a model worker"})
+	if v.Error == "" {
+		t.Fatal("second model runtime admitted")
+	}
 }
-func TestRunToolsProposeWithoutWriting(t *testing.T) {
- root, home := t.TempDir(), t.TempDir()
- original := sourceWithBranches(2)
- if err := os.WriteFile(filepath.Join(root, "main.go"), original, 0600); err != nil { t.Fatal(err) }
- calls := 0
- p := providerFunc(func(ctx context.Context, m []Message) (Message, error) {
-  calls++
-  if calls > 1 { return Message{Role:"assistant", Content:"Please review the proposal."}, nil }
-  var call ToolCall
-  call.ID = "edit-1"
-  call.Type = "function"
-  call.Function.Name = "propose_edit"
-  args, _ := json.Marshal(map[string]string{"path":"main.go", "original_hash":Hash(original), "replacement":string(sourceWithBranches(0))})
-  call.Function.Arguments = string(args)
-  return Message{Role:"assistant", ToolCalls:[]ToolCall{call}}, nil
- })
- s := Start(root, home, p)
- defer s.Close()
- waitReady(t, s)
- submitWait(t, s, Request{"include", "main.go"})
- v := submitWait(t, s, Request{"run", "Reduce complexity"})
- if v.Session.Status != "review" || len(v.Session.Proposals) != 1 { t.Fatalf("run did not propose: %+v", v.Session) }
- data, _ := os.ReadFile(filepath.Join(root, "main.go"))
- if string(data) != string(original) { t.Fatal("agent wrote source without user approval") }
- if v.Session.Evidence.TestsPassed || v.Session.Reward.NewCredit != 0 { t.Fatal("model invented evidence or reward") }
+func TestContextSnapshotChecksAndStaleReward(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module sample\n\ngo 1.23\n"), 0600)
+	source := filepath.Join(root, "main.go")
+	os.WriteFile(source, sourceWithBranches(12), 0600)
+	os.WriteFile(filepath.Join(root, "main_test.go"), []byte("package sample\nimport (\"testing\";\"os\")\nfunc TestWork(t *testing.T){if err:=os.WriteFile(\"only-in-snapshot.txt\",[]byte(\"x\"),0600);err!=nil{t.Fatal(err)}}\n"), 0600)
+	s := Start(root, home)
+	defer s.Close()
+	waitReady(t, s)
+	submitWait(t, s, Request{"index", ""})
+	os.WriteFile(source, sourceWithBranches(9), 0600)
+	v := submitWait(t, s, Request{"check", ""})
+	if v.Error != "" {
+		t.Fatalf("checks: %s", v.Error)
+	}
+	if !v.Session.Evidence.TestsPassed || !v.Session.Evidence.VetPassed {
+		t.Fatal("missing evidence")
+	}
+	if _, err := os.Stat(filepath.Join(root, "only-in-snapshot.txt")); !os.IsNotExist(err) {
+		t.Fatal("checks executed in live tree")
+	}
+	v = submitWait(t, s, Request{"reward", ""})
+	if v.Session.Reward.NewCredit != 15 {
+		t.Fatalf("wrong reward: %+v", v.Session.Reward)
+	}
+	v = submitWait(t, s, Request{"reward", ""})
+	if v.Session.Reward.NewCredit != 0 {
+		t.Fatal("duplicate credit")
+	}
+	os.WriteFile(source, sourceWithBranches(8), 0600)
+	v = submitWait(t, s, Request{"reward", ""})
+	if v.Session.Reward.NewCredit != 0 || !strings.Contains(v.Session.Reward.Reason, "exact snapshot") {
+		t.Fatal("stale evidence rewarded")
+	}
 }
-func TestCancellationAndBoundedSubmission(t *testing.T) {
- entered := make(chan struct{})
- p := providerFunc(func(ctx context.Context, _ []Message) (Message, error) {
-  close(entered)
-  <-ctx.Done()
-  return Message{}, ctx.Err()
- })
- s := Start(t.TempDir(), t.TempDir(), p)
- defer s.Close()
- waitReady(t, s)
- if !s.Submit(Request{"run", "test cancellation"}) { t.Fatal("run rejected") }
- select {
- case <-entered:
- case <-time.After(5*time.Second): t.Fatal("provider not called")
- }
- if s.Submit(Request{"index", ""}) { t.Fatal("unbounded concurrent run accepted") }
- s.Cancel()
- v := waitReady(t, s)
- if v.Session.Status != "cancelled" { t.Fatalf("cancel: %+v", v.Session) }
+func TestContextBudgetExcludeAndForget(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(root, "main.go"), sourceWithBranches(1), 0600)
+	s := Start(root, home)
+	defer s.Close()
+	waitReady(t, s)
+	for i := 0; i < 4; i++ {
+		v := submitWait(t, s, Request{"remember", strings.Repeat("a", 2048)})
+		if v.Error != "" {
+			t.Fatal(v.Error)
+		}
+	}
+	if v := submitWait(t, s, Request{"remember", "over limit"}); v.Error == "" {
+		t.Fatal("unbounded notes")
+	}
+	submitWait(t, s, Request{"include", "main.go"})
+	submitWait(t, s, Request{"index", ""})
+	v := submitWait(t, s, Request{"exclude", "main.go"})
+	if strings.Contains(v.ProviderContext, "main.go") {
+		t.Fatal("excluded metadata retained")
+	}
+	v = submitWait(t, s, Request{"forget", ""})
+	if v.ProviderContext != "" || len(v.Session.Notes) != 0 || v.GraphFiles != 1 {
+		t.Fatal("forget discarded graph or retained notes")
+	}
 }
-func TestProviderProtocolAndNoRedirect(t *testing.T) {
- srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-  if r.Header.Get("Authorization") != "Bearer test-key" { t.Error("missing authorization") }
-  var payload struct {
-   Tools []any `json:"tools"`
-   Messages []Message `json:"messages"`
-  }
-  if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || len(payload.Tools) != 5 { t.Error("bad request") }
-  w.Header().Set("Content-Type", "application/json")
-  w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Done"}}]}`))
- }))
- defer srv.Close()
- p, err := NewHTTPProvider(srv.URL, "test-model", "test-key")
- if err != nil { t.Fatal(err) }
- m, err := p.Complete(context.Background(), []Message{{Role:"user", Content:"hello"}})
- if err != nil || m.Content != "Done" { t.Fatalf("response: %+v %v", m, err) }
- for _, endpoint := range []string{"http://example.com/v1", "https://user:pass@example.com/v1", "https://example.com/v1?key=secret"} {
-  if _, err := NewHTTPProvider(endpoint, "test", ""); err == nil { t.Errorf("unsafe endpoint %s", endpoint) }
- }
- redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, srv.URL, http.StatusFound) }))
- defer redirect.Close()
- p, _ = NewHTTPProvider(redirect.URL, "test-model", "test-key")
- _, err = p.Complete(context.Background(), []Message{{Role:"user", Content:"hello"}})
- if err == nil || strings.Contains(err.Error(), "test-key") { t.Fatalf("redirect or secret leak: %v", err) }
+func TestContextRejectsCorruptCheckpointWithoutOverwrite(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	store, err := OpenStore(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.Dir, "session.json")
+	os.WriteFile(path, []byte("bad json"), 0600)
+	store.Close()
+	s := Start(root, home)
+	v := waitReady(t, s)
+	if v.Error == "" {
+		t.Fatal("corruption hidden")
+	}
+	s.Close()
+	got, _ := os.ReadFile(path)
+	if string(got) != "bad json" {
+		t.Fatal("corrupt checkpoint overwritten")
+	}
 }
-func TestToolCannotExecuteCommandsOrReadUnincludedSource(t *testing.T) {
- root := t.TempDir()
- os.WriteFile(filepath.Join(root, "main.go"), sourceWithBranches(0), 0600)
- w := worker{service:&Service{root:root}, session:Session{Version:SchemaVersion}}
- for _, name := range []string{"shell", "read_file", "propose_edit"} {
-  var call ToolCall
-  call.Function.Name = name
-  call.Function.Arguments = `{"path":"main.go"}`
-  if _, err := w.tool(context.Background(), call); err == nil { t.Errorf("unauthorised %s", name) }
- }
- var call ToolCall
- call.Function.Name = "request_checks"
- call.Function.Arguments = `{}`
- out, err := w.tool(context.Background(), call)
- if err != nil || !strings.Contains(out, "no command executed") || w.session.Evidence.TestsPassed { t.Fatalf("checks ran implicitly: %s %v", out, err) }
+
+func TestContextIndexExcludesItsOwnNestedState(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "state")
+	os.WriteFile(filepath.Join(root, "main.go"), sourceWithBranches(0), 0600)
+	s := Start(root, home)
+	defer s.Close()
+	waitReady(t, s)
+	v := submitWait(t, s, Request{"index", ""})
+	hash := v.GraphHash
+	v = submitWait(t, s, Request{"index", ""})
+	if v.GraphFiles != 1 || v.GraphHash != hash || v.Stats.Parsed != 0 {
+		t.Fatalf("state indexed itself: %+v", v)
+	}
 }

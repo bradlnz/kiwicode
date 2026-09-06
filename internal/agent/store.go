@@ -120,7 +120,7 @@ func LoadSession(path string) (Session, error) {
 		s.State = Interrupted
 		s.Log.Add("Previous run was interrupted. Commands and approvals were not replayed.")
 	}
-	if s.View < 0 || s.View > 3 {
+	if s.View < 0 || s.View >= ViewCount {
 		s.View = 0
 	}
 	for i := range s.Scroll {

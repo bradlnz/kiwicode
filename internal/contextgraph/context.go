@@ -1,6 +1,6 @@
-// Package agent owns local context, a syntactic code graph and verified quality
+// Package contextgraph owns local context, a syntactic code graph and verified quality
 // signals. No model call is required to index a workspace or inspect its debt.
-package agent
+package contextgraph
 
 import (
 	"bytes"
@@ -272,7 +272,7 @@ func Analyze(path string, data []byte, old *File) (*File, bool) {
 // Scan hashes source content (not just timestamps) and only reparses changed
 // files. Run it in a worker, on explicit refresh/run/check, never on a keypress.
 // Returning a new map preserves the previous graph if scanning fails halfway.
-func Scan(ctx context.Context, root string, previous *Graph) (*Graph, ScanStats, error) {
+func Scan(ctx context.Context, root string, previous *Graph, excludedDirectories ...string) (*Graph, ScanStats, error) {
 	result := &Graph{Version: SchemaVersion, Files: map[string]*File{}}
 	var stats ScanStats
 	var bytesRead int64
@@ -292,6 +292,11 @@ func Scan(ctx context.Context, root string, previous *Graph) (*Graph, ScanStats,
 		}
 		rel = filepath.ToSlash(rel)
 		if entry.IsDir() {
+			for _, excluded := range excludedDirectories {
+				if filepath.Clean(path) == filepath.Clean(excluded) {
+					return filepath.SkipDir
+				}
+			}
 			name := strings.ToLower(entry.Name())
 			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "secrets" || name == "credentials" {
 				return filepath.SkipDir

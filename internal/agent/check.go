@@ -153,3 +153,25 @@ func executeCheck(ctx context.Context, dir string, argv []string) CheckResult {
 	result.Error = strings.TrimSpace(Display(result.Error))
 	return result
 }
+
+// CheckWorkspace executes a user-authorised fixed check on a temporary snapshot.
+// Callers must enforce approval; this is not an OS/filesystem/network sandbox.
+func CheckWorkspace(ctx context.Context, directory string, files, argv []string) (CheckResult, error) {
+	if len(files) > MaxFiles {
+		return CheckResult{}, errors.New("snapshot file-count limit exceeded")
+	}
+	root, err := openWorkspace(directory)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	defer root.Close()
+	paths := make([]string, len(files))
+	for i, path := range files {
+		paths[i], err = CleanPath(path)
+		if err != nil {
+			return CheckResult{}, err
+		}
+	}
+	w := worker{root: root, files: paths}
+	return w.check(ctx, argv)
+}

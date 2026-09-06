@@ -1,83 +1,95 @@
-# Agent workspace, persistent context and quality signals
+# Persistent context, code graph and quality scores
 
-KiwiCode remains a Go application. This is a bounded first implementation of the agent workflow, not a complete autonomous-development platform or a trained reward model. It implements a main-workspace Agent tab, local context, a syntactic Go graph, a provider/tool loop, reviewed buffer proposals and evidence-gated complexity-debt scoring.
+The integrated Agent uses the streamed runtime, explicit approvals, temporary
+snapshot checks, batched input and coalesced rendering documented in
+[Agent workspace](agent-workspace.md). There is **one model runtime**, not two
+competing implementations. The context worker is a separate local service.
 
-## Start and navigate
+## Views and commands
 
-Build with the Go version declared by `go.mod`. The existing editor state restoration also requires the `sqlite3` executable.
+Agent has Plan, Activity, Changes, Checks, Graph, Quality and Context views. Tab
+cycles through them; a narrow terminal keeps the selected view label visible.
+File-tab Save/Undo, read approvals, `/approve`, `/deny`, `/apply N`, `/open N`,
+`/reject N` and `/new` retain their existing behaviour.
 
-`Ctrl+A` switches between Agent and code. The Agent tab is also mouse-accessible. `Tab` cycles Plan, Activity, Changes, Checks, Graph, Quality and Context. Arrow/Page keys scroll the active view. `Ctrl+X` cancels the active operation from either workspace tab; `Ctrl+C` also cancels while Agent is active. File save/undo/close shortcuts cannot act on a hidden buffer through the Agent tab.
+| Command | Behaviour |
+| --- | --- |
+| `/task TEXT` | Persist a task locally without contacting a provider. |
+| `/run [TEXT]` | Submit TEXT, or the saved task, to the configured streamed provider. Plain task text also starts a run. |
+| `/remember NOTE` | Persist an explicit context note. |
+| `/include PATH` | Include a permitted file's graph metadata in future task context. This does not approve reading source. |
+| `/exclude PATH` | Exclude that metadata and clear provider conversation history so previously read content is not reused there. Explicit notes remain separate. |
+| `/index` | Refresh local content hashes and reparse only changed files. |
+| `/check` | With `KIWICODE_AGENT_ALLOW_COMMANDS=1`, repeat the exact command to authorise `go test -count=1 ./...` and `go vet ./...` on temporary snapshots. Dirty buffers are refused. |
+| `/reward` | Record user review and evaluate checks against the current graph snapshot. Dirty buffers are refused. |
+| `/forget` | Clear task notes, included paths and transcript checkpoints; retain graph, fixed reward baseline and high-water credit. Applied buffer changes are not discarded. |
 
-The run service is independent of the selected tab. Do not confuse activity within the running editor with an external/background assistant service: exiting KiwiCode cancels the service and flushes local state.
+Ctrl+X cancels either model work or context work. Switching tabs does not cancel
+work. Model execution, context checks and proposal application cannot race each
+other through the UI. File editing remains available during worker operations.
 
-## Local context and graph
+## Persistence and disclosure
 
-Enter commands in Agent and press Enter:
+Context notes, included paths, graph, baseline, check evidence and recent scores
+are stored under `$XDG_STATE_HOME/code-editor/agent/<workspace-hash>/`, falling
+back to `~/.local/state`. Files use owner-only permissions, atomic replacement
+and a nonblocking single-writer lock. Corrupt/unsupported context is reported
+rather than overwritten. Interrupted checks are not replayed. The context store
+excludes its own application-state directory from scans when state is nested
+inside a workspace.
 
-```text
-/remember Keep Go. Benchmark changes before merging.
-/task Improve typing latency without changing behaviour.
-/include src/buffer.go
-/index
-```
+The existing transcript/draft checkpoint remains opt-in with
+`KIWICODE_AGENT_HISTORY=1`, under `code-editor/agents/`. Context and transcript
+stores have different purposes. Clearing history is not secure erasure or deletion
+of backups; state is not encrypted. Known provider-key redaction and conservative
+source guards are not comprehensive secret detection.
 
-A plain prompt saves a task locally; it does not call a model. `/remember` persists an explicit context note. `/include` selects an existing source file that a subsequent user-authorised run may read. `/exclude path` removes that selection, clears recent provider history and removes that file's pending proposals. Notes are separate. `/forget` clears task context, notes, included paths, proposals and recent history, but retains the graph, initial baseline and reward history. It is not secure erasure and cannot retract data already sent to a provider.
+Only explicit notes and explicitly included graph metadata accompany a submitted
+task. File bytes still require the streamed runtime's individual read approval.
+Provider configuration remains `KIWICODE_AGENT_ENDPOINT`,
+`KIWICODE_AGENT_MODEL`, and `KIWICODE_AGENT_API_KEY`. No provider is configured
+or contacted automatically by indexing, remembering a note or restoring state.
 
-The application stores `session.json`, `graph.json` and `baseline.json` under `$XDG_STATE_HOME/code-editor/agent/<workspace-hash>/`, falling back to `~/.local/state/code-editor/agent/<workspace-hash>/`. This is inside KiwiCode's local application state, **not in tracked repository files**. Each canonical workspace path has separate state and an exclusive writer lock. Writes use temporary files, sync and rename; state directories and files use owner-only permissions. State is not encrypted. Store corruption or an unsupported schema is reported rather than silently overwritten. Interrupted runs are not replayed.
+## Performance and limits
 
-The graph stores content hashes, declarations, import edges, syntactic calls, complexity facts and debt-note locations. It does not retain ASTs or complete source text. Session proposals do retain their original and proposed source for review; notes, outputs and conversation summaries also persist locally. Avoid placing credentials in prompts, source context or notes; redaction is deliberately limited and is not a general secret detector.
+Context/model/file I/O and checks are worker operations, never per-keypress scans.
+The context worker has a one-entry command queue and latest-view queue. View
+projections rebuild on context changes or resize, not on every input rune.
+Main's 16 ms frame scheduler and hidden-token redraw suppression are preserved.
 
-Go source gets syntactic analysis; other allowlisted languages currently get file/hash metadata only. Calls are not type-resolved and build tags are not resolved. Symlinks and common secret/hidden/vendor paths are restricted. This is not a complete `.gitignore` implementation or a sandbox against concurrent malicious filesystem changes.
+Notes are bounded to 8 KiB total, 64 entries, 2 KiB each; included paths to 32;
+provider metadata to 16 KiB; graph input to 20,000 files/128 MiB with a 2 MiB
+per-file limit; persisted graph to 64 MiB. Graph presentation is capped. Checks
+inherit the stricter existing snapshot runner's 2,048-file/16 MiB limits and
+reject incomplete snapshots. Source-size and parse limits are reported, not
+represented as complete successful analysis.
 
-## Provider and controlled workflow
+## Graph and reward semantics
 
-Configure these environment variables before starting KiwiCode:
+Go files have declarations, imports, syntactic calls and complexity/debt facts.
+Other allowlisted source types have metadata only. Calls are not type-resolved;
+build tags, full `.gitignore`, filesystem watching and whole-program semantics
+are not implemented. Each explicit scan still reads and hashes source; unchanged
+nodes avoid parsing. TODO/FIXME notes are facts, not rewarded work.
 
-```sh
-export KIWICODE_AGENT_URL='https://YOUR-PROVIDER/full/chat/completions/endpoint'
-export KIWICODE_AGENT_MODEL='YOUR-MODEL'
-# Supply KIWICODE_AGENT_KEY through your local secret-management mechanism.
-```
+Policy v1 awards **5 points per reduction of complexity excess above 10** against
+the initial fixed baseline. Evidence requires passing tests and vet for the exact
+indexed source snapshot, then explicit user review. Changed/deleted baseline
+tests, deleted/renamed baseline functions and parse errors conservatively withhold
+credit. High-water accounting avoids repeat payouts and simple fix/revert farming.
+Low-complexity code is recorded as a quality fact, but creating code volume alone
+never earns credit. This is an auditable heuristic, not a learned reward model,
+proof of correctness or coverage of every kind of technical debt.
 
-The adapter uses a Chat-Completions-shaped HTTP JSON protocol with function tools. Supply the full endpoint URL. HTTPS is required except for loopback HTTP; redirects are disabled. Compatibility with a particular hosted provider/model must be tested, not assumed. There is no automatic provider fallback and no model contact until `/run`.
+Both check pathways use the existing temporary-snapshot runner with its minimal
+child environment. **A temporary snapshot is not an OS security sandbox**:
+approved code can access host files/network. Use commands only for trusted code.
+The reward ledger is local application state, not tamper-proof financial credit.
 
-`/run` authorises transmission of the task, saved notes, recent summaries and explicitly included file context to the configured provider. The loop can set a plan, read included files, inspect their graphs, propose replacement contents, and request checks. It cannot approve its own changes or invoke an arbitrary shell. Responses are currently delivered per model turn, not token-streamed.
+## Validation
 
-After a proposal, inspect Changes, use `/apply ID`, review the dirty file buffer and explicitly save with `Ctrl+S`. Application to a buffer is undoable and rejects stale disk content or unsaved edits. It does not write disk automatically. `/reject ID` records a rejection. Proposals currently replace existing included files up to 32 KiB; creating files, deleting files and multi-file transactions are not implemented. Changes displays original/replacement lines, not a minimal hunk diff.
-
-`/check` is a separate explicit approval to execute `go test -count=1 ./...` followed by `go vet ./...`. These run with the user's account: **not in a sandbox**. Environment filtering and disabled Go proxy/toolchain downloads do not prevent repository code from accessing files or networking. Only use checks in trusted workspaces. Output is capped and cancellation kills the process group. Save dirty buffers first. Hashes must match before/after checks for evidence to be retained; hashes cover indexed source, not every possible runtime input or environment dependency.
-
-## Reward policy v1
-
-Debt is recorded, not rewarded for existing. A low-complexity function produces a quality fact; simply generating more code earns no credit.
-
-For eligible reviewed changes, the cumulative score is five points per reduced complexity-excess unit, where excess is `max(0, complexity - 10)` for non-test, non-generated functions. The first indexed graph is the fixed baseline. New complexity debt reduces the score. Tests and vet must have passed for the current indexed snapshot, and `/reward` is the user's explicit review acknowledgement.
-
-Changed existing tests, removed tests, deleted/renamed baseline functions, parse errors and stale evidence withhold automatic credit. Removing TODO comments earns nothing. A persisted high-water mark prevents paying for the same improvement twice or a simple fix/revert cycle. Per-symbol score deltas and a bounded history of verified snapshots are retained.
-
-This policy is a conservative maintainability heuristic. It does not measure every form of technical debt, prove correctness, resist a malicious local user altering its state, or train/update model weights. Security, coverage, dependency architecture, measured runtime performance and richer quality evaluators remain additional work. Semantic refactors and test improvements may need manual evaluation because v1 withholds their automatic credit.
-
-## Performance constraints and measurements
-
-Graph parsing, model calls, state writes and checks run in the service worker, not in the keystroke handler. Content hashing detects changes; unchanged file nodes are reused without reparsing. A refresh still reads/hashes eligible files. There is no filesystem watcher yet. One operation runs per workspace, with bounded queues, context, output, proposal and history limits. Draft saves are coalesced on a 750 ms worker tick. The UI polls workers during typing as well as idle time. Terminal size is checked at startup and on SIGWINCH rather than spawning `stty size` per keypress.
-
-Limits include 20,000 files, 128 MiB of indexed input, 2 MiB per source file, 8 MiB session state, 64 MiB graph state, 32 included files, 8 proposals, 8 model turns, 16 tool calls and a three-minute operation deadline. These bound normal workloads; they are not a formal peak-memory or hard real-time guarantee. Existing full-screen rendering and some synchronous editor operations remain optimisation targets.
-
-Microbenchmark, Linux amd64 / Intel Xeon Platinum 8272CL / Go 1.23.2, medians of three 200 ms runs on the same 30-branch function fixture:
-
-| Analysis path | ns/op | B/op | allocations/op |
-| --- | ---: | ---: | ---: |
-| Unchanged file/node reused | 2,308 | 128 | 2 |
-| Parse fixture anew | 69,842 | 14,648 | 418 |
-
-This compares cached and reparsed component paths, **not before/after whole-editor latency**. The local harness used an uncommitted alternate module file for Go 1.23.2; the repository's Go requirement was not changed.
-
-```sh
-go test ./...
-go test -race ./...
-go vet ./...
-go build -o /tmp/kiwicode ./src
-go test ./internal/agent -run '^$' -bench '^BenchmarkAnalyze' -benchmem -benchtime=200ms -count=3
-```
-
-Dedicated tests cover graph reuse/cancellation, source-path guards, state locking/round trips, evidence gates and duplicate-credit prevention, restored context without model replay, model-tool proposals without writes, provider transport guards, cancellation, tab hit testing, input isolation, dirty/stale-buffer protection, undo and terminal-control sanitisation. Hosted-provider smoke tests, interactive terminal validation and end-to-end latency measurements are still required before treating this as production-ready.
+CI runs unit/integration tests, race detection, vet, a full build, the real-PTY
+smoke test and component benchmarks. Context integration tests cover persistence,
+metadata-only provider context, snapshot-only writes, stale evidence, duplicate
+credit, nested-state exclusion, corrupt checkpoints, seven-view navigation,
+input isolation, and command approval/dirty-buffer gates.

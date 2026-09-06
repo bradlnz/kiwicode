@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	ViewCount        = 7
 	MaxFileBytes     = 256 << 10
 	MaxContextBytes  = 512 << 10
 	MaxResponseBytes = 1 << 20
@@ -116,16 +117,16 @@ func (l Log) At(i int) string {
 }
 
 type Session struct {
-	Version int           `json:"version"`
-	Draft   string        `json:"draft,omitempty"`
-	State   State         `json:"state"`
-	Plan    []string      `json:"plan,omitempty"`
-	Log     Log           `json:"log"`
-	Changes []Change      `json:"changes,omitempty"`
-	Checks  []CheckResult `json:"checks,omitempty"`
-	History []Message     `json:"history,omitempty"`
-	View    int           `json:"view,omitempty"`
-	Scroll  [4]int        `json:"scroll,omitempty"`
+	Version int            `json:"version"`
+	Draft   string         `json:"draft,omitempty"`
+	State   State          `json:"state"`
+	Plan    []string       `json:"plan,omitempty"`
+	Log     Log            `json:"log"`
+	Changes []Change       `json:"changes,omitempty"`
+	Checks  []CheckResult  `json:"checks,omitempty"`
+	History []Message      `json:"history,omitempty"`
+	View    int            `json:"view,omitempty"`
+	Scroll  [ViewCount]int `json:"scroll,omitempty"`
 }
 
 func NewSession() Session { return Session{Version: 1, State: Idle} }

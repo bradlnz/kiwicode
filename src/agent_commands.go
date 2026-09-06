@@ -2,6 +2,7 @@ package main
 
 import (
 	"code-editor/internal/agent"
+	"code-editor/internal/contextgraph"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,7 +21,30 @@ func (e *editor) agentSlash(text string) bool {
 			return false
 		}
 	}
+	if handled, ok := e.contextSlash(text); handled {
+		return ok
+	}
+	if fields[0] != "/check" {
+		a.checkArmed = false
+	}
 	switch fields[0] {
+	case "/run":
+		task := strings.TrimSpace(strings.TrimPrefix(text, "/run"))
+		if task == "" {
+			task = a.memoryView.Session.Task
+		}
+		if task == "" || strings.HasPrefix(task, "/") {
+			e.status = "Set /task TEXT or use /run TEXT"
+			return false
+		}
+		saved, cursor := a.input, a.cursor
+		a.input = []rune(task)
+		a.cursor = len(a.input)
+		e.submitAgent()
+		if a.run == nil {
+			a.input, a.cursor = saved, cursor
+			return false
+		}
 	case "/cancel":
 		e.cancelAgent()
 	case "/approve", "/deny":
@@ -87,27 +111,31 @@ func (e *editor) agentSlash(text string) bool {
 			return false
 		}
 		a.session = agent.NewSession()
-		a.viewLines, a.activityRows = [4][]string{}, agent.Log{}
+		a.viewLines, a.activityRows = [agent.ViewCount][]string{}, agent.Log{}
 		a.follow = true
-		a.viewDirty = [4]bool{true, true, true, true}
+		a.viewDirty = [agent.ViewCount]bool{true, true, true, true, true, true, true}
 		a.newArmed, a.forget = false, false
 		e.status = "New agent session"
 	case "/forget":
-		if a.run != nil {
+		if a.run != nil || a.memoryBusy() {
 			e.status = "Cancel the run before forgetting history"
+			return false
+		}
+		if a.memory != nil && !a.memory.Submit(contextgraph.Request{Kind: "forget"}) {
+			e.status = "Context unavailable; nothing cleared"
 			return false
 		}
 		if a.store != nil {
 			a.store.Queue(nil)
 		}
 		a.session = agent.NewSession()
-		a.viewLines, a.activityRows = [4][]string{}, agent.Log{}
+		a.viewLines, a.activityRows = [agent.ViewCount][]string{}, agent.Log{}
 		a.follow = true
-		a.viewDirty = [4]bool{true, true, true, true}
+		a.viewDirty = [agent.ViewCount]bool{true, true, true, true, true, true, true}
 		a.forget = true
 		e.status = "Agent history cleared; applied file edits are retained"
 	default:
-		e.status = "Commands: /approve /deny /cancel /apply N /open N /reject N /new /forget"
+		e.status = "Commands: /approve /deny /cancel /apply N /open N /reject N /new /forget /index /remember /include /exclude /check /reward"
 		return false
 	}
 	return true
