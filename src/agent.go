@@ -172,7 +172,7 @@ func (w *agentWorkspace) paintTabs(out *strings.Builder) {
 		if w.kind == workspaceFileTab && i == e.active {
 			prefix = "\x1b[1;4m" + ansiFG(colors.text)
 		}
-		writeCell(out, 2, x, prefix+fit(label, visible))
+		writeCell(out, 2, x, prefix+fitAgentText(label, visible))
 		x += visible
 	}
 	label := " Agent · ^A "
@@ -190,7 +190,7 @@ func (w *agentWorkspace) paintTabs(out *strings.Builder) {
 	if w.kind == workspaceAgentTab {
 		prefix += "\x1b[1;4m"
 	}
-	writeCell(out, 2, end, prefix+fit(label, agentWidth))
+	writeCell(out, 2, end, prefix+fitAgentText(label, agentWidth))
 	w.tabs = append(w.tabs, workspaceTab{kind: workspaceAgentTab, left: end, right: left + width - 1})
 }
 func (w *agentWorkspace) draw() {
@@ -212,7 +212,7 @@ func (w *agentWorkspace) draw() {
 	for row := 1; row <= e.rows; row++ {
 		writeCell(&out, row, 1, strings.Repeat(" ", e.cols))
 	}
-	writeCell(&out, 1, 1, fit("KiwiCode · Agent | "+w.view.Session.Status+" | Tab views · ^A code · ^X cancel", e.cols))
+	writeCell(&out, 1, 1, fitAgentText("KiwiCode · Agent | "+w.view.Session.Status+" | Tab views · ^A code · ^X cancel", e.cols))
 	w.paintTabs(&out)
 	var labels []string
 	for i, name := range agentSections {
@@ -221,17 +221,17 @@ func (w *agentWorkspace) draw() {
 		}
 		labels = append(labels, name)
 	}
-	writeCell(&out, 3, 1, fit(strings.Join(labels, "  "), e.cols))
+	writeCell(&out, 3, 1, fitAgentText(strings.Join(labels, "  "), e.cols))
 	height := max(0, e.rows-6)
 	for i := 0; i < height && w.top+i < len(w.lines); i++ {
-		writeCell(&out, 4+i, 1, fit(w.lines[w.top+i], e.cols))
+		writeCell(&out, 4+i, 1, fitAgentText(w.lines[w.top+i], e.cols))
 	}
-	writeCell(&out, e.rows-2, 1, fit(w.status, e.cols))
-	writeCell(&out, e.rows-1, 1, fit("/task /remember /include /run /index /apply ID /check /reward /forget", e.cols))
+	writeCell(&out, e.rows-2, 1, fitAgentText(w.status, e.cols))
+	writeCell(&out, e.rows-1, 1, fitAgentText("/task /remember /include /run /index /apply ID /check /reward /forget", e.cols))
 	available := max(1, e.cols-3)
 	start := max(0, w.inputCol-available+1)
 	stop := min(len(w.input), start+available)
-	writeCell(&out, e.rows, 1, fit("> "+string(w.input[start:stop]), e.cols))
+	writeCell(&out, e.rows, 1, fitAgentText("> "+string(w.input[start:stop]), e.cols))
 	fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", e.rows, 3+w.inputCol-start)
 	fmt.Print(out.String())
 }
@@ -450,4 +450,10 @@ func (w *agentWorkspace) apply(id string) error {
 	w.editor.status = "Agent proposal applied to buffer; review and Ctrl+S to save. Ctrl+Z undoes it."
 	w.service.Submit(agent.Request{Kind: "applied", Text: id})
 	return nil
+}
+
+// Treat provider text, workspace names and restored input as plain terminal text.
+// fit historically preserves short strings verbatim, including control bytes.
+func fitAgentText(text string, width int) string {
+	return fit(plain(text), max(0, width))
 }
