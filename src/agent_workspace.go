@@ -505,7 +505,7 @@ func (e *editor) checkpointAgent(now time.Time, force bool) bool {
 			changed = true
 		default:
 		}
-		if !a.forget && a.dirty && (force || now.Sub(a.lastSaved) >= time.Second) {
+		if os.Getenv("KIWICODE_AGENT_HISTORY") == "1" && !a.forget && a.dirty && (force || now.Sub(a.lastSaved) >= time.Second) {
 			a.store.Queue(&a.session)
 			a.lastSaved, a.dirty = now, false
 		}
