@@ -10,6 +10,8 @@ import (
 )
 
 type editor struct {
+	workspace                 workspaceKind
+	agent                     *agentWorkspace
 	files                     []string
 	tree                      []treeEntry
 	collapsed                 map[string]bool
@@ -151,6 +153,7 @@ func (e *editor) open(path string) {
 	for i, b := range e.buffers {
 		if b.path == path {
 			e.active, e.explorer, e.opsMode = i, false, ""
+			e.workspace = workspaceFile
 			e.refreshInspector()
 			e.loadMembersInBackground(path)
 			if e.sourceMode {
@@ -179,6 +182,7 @@ func (e *editor) open(path string) {
 	}
 	e.buffers = append(e.buffers, newBuffer(path, data))
 	e.active, e.explorer, e.opsMode = len(e.buffers)-1, false, ""
+	e.workspace = workspaceFile
 	e.refreshInspector()
 	e.loadMembersInBackground(path)
 	if e.sourceMode {
@@ -189,6 +193,13 @@ func (e *editor) open(path string) {
 func (e *editor) current() *buffer { return e.buffers[e.active] }
 
 func (e *editor) handle(k key) bool {
+	if e.workspace == workspaceAgent {
+		return e.handleAgent(k)
+	}
+	if action := shortcutAction(k.r); action == "agent" || action == "agent-cancel" {
+		_, quit := e.handleCommand(action)
+		return quit
+	}
 	if k.mouse {
 		e.handleMouse(k)
 		return e.quitRequested
@@ -302,6 +313,9 @@ func (e *editor) clearModalViews() {
 }
 
 func (e *editor) handleCommand(action string) (handled, quit bool) {
+	if handled, quit := e.agentCommand(action); handled {
+		return handled, quit
+	}
 	switch action {
 	case "undo":
 		if e.current().undoChange() {
@@ -443,6 +457,10 @@ func (e *editor) toggleGraph() {
 }
 
 func (e *editor) handleMouse(k key) {
+	if e.workspace == workspaceAgent {
+		e.handleAgentMouse(k)
+		return
+	}
 	if e.newFilePrompt {
 		return
 	}
@@ -541,7 +559,7 @@ func (e *editor) handleMouse(k key) {
 				}
 			}
 		} else if !e.graph && !e.help && e.opsMode == "" {
-			e.selectTab(k.x - editorX - 1)
+			e.selectWorkspaceTab(k.x - editorX - 1)
 		}
 		return
 	}
@@ -609,7 +627,7 @@ func (e *editor) handleMouse(k key) {
 }
 
 func (e *editor) editorFocused() bool {
-	return !e.explorer && !e.modalViewOpen()
+	return e.workspace == workspaceFile && !e.explorer && !e.modalViewOpen()
 }
 
 func (e *editor) handleWheel(k key) {
@@ -661,6 +679,7 @@ func (e *editor) selectTab(column int) {
 		return
 	}
 	e.active = i
+	e.workspace = workspaceFile
 	e.refreshInspector()
 	e.loadMembersInBackground(e.current().path)
 	if offset >= tabWidth(e.buffers[i])-(settings.tabPadding+1) {
@@ -846,6 +865,10 @@ func isTestFile(path string) bool {
 }
 
 func (e *editor) openFolder(path string) {
+	if e.agentRunning() {
+		e.status = "Cancel the agent run before opening another folder"
+		return
+	}
 	if e.workspaceDone != nil {
 		e.status = "Workspace is still loading"
 		return
@@ -865,6 +888,7 @@ func (e *editor) openFolder(path string) {
 		return
 	}
 	_ = e.saveState()
+	e.closeAgent()
 	if err := os.Chdir(path); err != nil {
 		e.status = "Open folder failed: " + err.Error()
 		return
@@ -994,7 +1018,7 @@ func (e *editor) handleNewFilePrompt(k key) {
 			return
 		}
 		if err = file.Close(); err != nil {
-			e.status = "New file failed: " + err.Error()
+			e.status = err.Error()
 			return
 		}
 		e.newFilePrompt, e.newFileInput = false, nil

@@ -26,7 +26,7 @@ func (e *editor) resize() {
 }
 
 func (e *editor) sidebarWidth() int {
-	if !e.showExplorer {
+	if e.workspace == workspaceAgent || !e.showExplorer {
 		return 0
 	}
 	width := sidebarActivityWidth()
@@ -52,6 +52,10 @@ func (e *editor) panelHeights() (content, shell int) {
 }
 
 func (e *editor) draw() {
+	if e.workspace == workspaceAgent {
+		fmt.Print(e.agentFrame())
+		return
+	}
 	if e.rows < 5 || e.cols < 30 {
 		fmt.Print("\x1b[H\x1b[2JTerminal must be at least 30x5")
 		return
@@ -125,7 +129,7 @@ func (e *editor) draw() {
 	if side > 0 {
 		writeCell(&out, 2, 1, fitANSI(e.sidebarActivityBar(), side))
 	}
-	header := e.tabs(editorWidth)
+	header := e.workspaceTabs(editorWidth)
 	writeCell(&out, 2, editorX+1, "\x1b[22m"+ansiFG(colors.text)+header)
 	if inspectWidth > 0 {
 		writeCell(&out, 2, inspectX+1, "\x1b[1m"+ansiFG(colors.accent)+fit(" INSPECT · SOLID / DRY", inspectWidth))
@@ -531,7 +535,7 @@ func (e *editor) tabs(width int) string {
 	start, end := e.visibleTabRange()
 	for i := start; i < end; i++ {
 		b := e.buffers[i]
-		if i == e.active {
+		if e.workspace == workspaceFile && i == e.active {
 			s.WriteString("\x1b[1;4m" + ansiFG(colors.text))
 		} else {
 			s.WriteString("\x1b[22;24m" + ansiFG(colors.muted))
