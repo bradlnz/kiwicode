@@ -12,3 +12,8 @@ target/
 coverage/
 __pycache__/
 .venv/
+
+# README capture diagnostics (PNGs and capture.json are tracked).
+/assets/screenshots/*.ansi
+/assets/screenshots/actions.json
+/assets/screenshots/xterm.log

@@ -7,7 +7,7 @@ explorer:
   max_width_percent: 50
 
 layout:
-  top_menu_padding: 10
+  top_menu_padding: 2
   popup_padding: 1
   tab_padding: 2
   sidebar_tab_padding: 2

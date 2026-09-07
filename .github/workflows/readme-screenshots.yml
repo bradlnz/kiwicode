@@ -1,0 +1,88 @@
+name: README screenshots
+
+on:
+  push:
+    branches: [docs/readme-editor-tour]
+    paths:
+      - 'examples/taskboard/**'
+      - 'tools/capture_readme.py'
+      - '.github/workflows/readme-screenshots.yml'
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'examples/taskboard/**'
+      - 'tools/capture_readme.py'
+      - '.github/workflows/readme-screenshots.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readme-screenshots-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install terminal capture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth xterm x11-utils fonts-dejavu-core python3-pil sqlite3
+      - name: Test the example
+        working-directory: examples/taskboard
+        run: |
+          go test -count=1 ./...
+          go vet ./...
+      - name: Build the real editor
+        run: go build -o /tmp/kiwicode ./src
+      - name: Capture and verify the editor tour
+        env:
+          KIWICODE_SOURCE_COMMIT: ${{ github.sha }}
+        run: python3 tools/capture_readme.py --binary /tmp/kiwicode
+      - name: Upload screenshots and capture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readme-screenshots
+          path: assets/screenshots/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: capture
+    if: github.event_name == 'push' && github.ref_name == 'docs/readme-editor-tour'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: readme-screenshots
+          path: assets/screenshots
+      - name: Commit generated images to the capture branch only
+        env:
+          CAPTURE_BRANCH: ${{ github.ref_name }}
+        run: |
+          git add -- assets/screenshots/editor-explorer.png \
+            assets/screenshots/file-search.png assets/screenshots/symbol-search.png \
+            assets/screenshots/test-explorer.png assets/screenshots/test-run.png \
+            assets/screenshots/capture.json
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: capture the real editor and search walkthrough'
+          git push origin "HEAD:refs/heads/$CAPTURE_BRANCH"
