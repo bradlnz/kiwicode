@@ -1,0 +1,69 @@
+{
+  "renderer": "Real editor PTY -> xterm under Xvfb -> Pillow X11 window capture",
+  "source_commit": "8f73f84550a9faa9cd2b6bdc94348f378d6f2382",
+  "binary_sha256": "d53747255decd1eabc4a067ec385b0076133065f6cab330caeea64e60435b29a",
+  "columns": 144,
+  "rows": 42,
+  "example": "examples/taskboard",
+  "workspace_unchanged": true,
+  "images": [
+    {
+      "file": "editor-explorer.png",
+      "width": 1464,
+      "height": 864,
+      "sha256": "1485ac85f4a8d13cf8ffd1fbad05673584f31097c88780e9d6aa05af87ecd3d0",
+      "assertions": [
+        "main.go",
+        "tasks_test.go",
+        "store_test.go",
+        "ListTasks(w"
+      ]
+    },
+    {
+      "file": "file-search.png",
+      "width": 1464,
+      "height": 864,
+      "sha256": "69b4db0e49065dc20c351d4e900b6657b43e45d951dc93f763bd42b0242e89d2",
+      "assertions": [
+        "Search files: tasks",
+        "internal/httpapi/tasks.go",
+        "web/tasks.js"
+      ]
+    },
+    {
+      "file": "symbol-search.png",
+      "width": 1464,
+      "height": 864,
+      "sha256": "e4181c0fb5ab7e92eca4c7a9a162352bbcf3624b1e90fbfa1818e6f83e041b2a",
+      "assertions": [
+        "Search functions: ListTasks",
+        "internal/httpapi/tasks.go:",
+        "internal/tasks/store.go:"
+      ]
+    },
+    {
+      "file": "test-explorer.png",
+      "width": 1464,
+      "height": 864,
+      "sha256": "d3db1e1bfe4225c23d62d43370dabc5cd8765e5655e4a39e5cf1ec8545788c9f",
+      "assertions": [
+        "TestListTasks",
+        "TestHealth",
+        "TestSeedTasks",
+        "TestTasksAreCopied",
+        "httptest.NewRequest"
+      ]
+    },
+    {
+      "file": "test-run.png",
+      "width": 1464,
+      "height": 864,
+      "sha256": "23b6a06d8bd099bab94a9cb69c52f6421b3afa2bb0bbe9b2641b190f4dc71351",
+      "assertions": [
+        "$ go test ./...",
+        "ok   example.com/kiwi-taskboard/internal/httpapi",
+        "ok   example.com/kiwi-taskboard/internal/tasks"
+      ]
+    }
+  ]
+}

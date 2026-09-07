@@ -1,0 +1,10 @@
+html { color-scheme: dark; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #101710; color: #edf4e5; }
+main { max-width: 48rem; margin: 12vh auto; padding: 2rem; }
+.eyebrow { color: #b8d88a; font-size: .75rem; letter-spacing: .15em; }
+h1 { font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.1; }
+#status, footer { color: #afbaa5; }
+ul { padding: 0; list-style: none; margin: 2rem 0; }
+li { padding: 1rem; border-bottom: 1px solid #34432e; }
+.done { color: #b8d88a; }
+footer { font-size: .85rem; }

@@ -1,0 +1,10 @@
+theme: forest
+
+explorer:
+  max_width_percent: 35
+
+layout:
+  top_menu_padding: 2
+  tab_padding: 1
+  sidebar_tab_padding: 1
+  explorer_indent: 2
