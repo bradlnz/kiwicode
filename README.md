@@ -5,7 +5,7 @@
 <h1 align="center">KiwiCode</h1>
 
 <p align="center">
-  <strong>A high-performance, keyboard-first TUI code editor, built in Go.</strong><br>
+  <strong>A high-performance, terminal-native code editor, built in Go.</strong><br>
   Edit code, explore projects, and run your tools in a built-in interactive terminal.
 </p>
 
