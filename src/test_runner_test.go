@@ -9,21 +9,47 @@ import (
 )
 
 func TestExplorerEmptyStates(t *testing.T) {
+	oldSettings, oldColors := settings, colors
+	defer func() { settings, colors = oldSettings, oldColors }()
+	resetSettings()
+	output, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = output
+	defer func() {
+		os.Stdout = stdout
+		output.Close()
+	}()
 	e := &editor{rows: 30, cols: 100, showExplorer: true, testMode: true, buffers: []*buffer{newBuffer("empty.txt", nil)}}
 	e.draw()
 	if !strings.Contains(e.lastFrame, "No tests found") {
 		t.Fatal("empty test explorer must explain that no tests were found")
+	}
+	if !strings.Contains(e.lastFrame, "\x1b[16;1H\x1b[0;49m\x1b[22m"+ansiFG(colors.muted)+" No tests found ") {
+		t.Fatal("empty test message must be centered in the sidebar")
 	}
 	e.testMode = false
 	e.draw()
 	if !strings.Contains(e.lastFrame, "No files found") || !strings.Contains(e.lastFrame, shortcutLabel("new")+" new file") {
 		t.Fatal("empty file explorer must show a message and how to create a file")
 	}
+	if !strings.Contains(e.lastFrame, "\x1b[15;1H\x1b[0;49m\x1b[22m"+ansiFG(colors.muted)+" No files found ") {
+		t.Fatal("empty file message and hint must form a centered group")
+	}
 	for _, mode := range []string{"files", "functions"} {
 		e.openSearch(mode)
 		e.draw()
 		if !strings.Contains(e.lastFrame, "No matching "+mode) {
 			t.Fatalf("empty %s search must explain there are no matches", mode)
+		}
+		padding := 21
+		if mode == "functions" {
+			padding = 19
+		}
+		if !strings.Contains(e.lastFrame, ansiBG(colors.menu, colors.muted, "22")+strings.Repeat(" ", padding)+"No matching "+mode) {
+			t.Fatalf("empty %s search message must be centered", mode)
 		}
 	}
 }

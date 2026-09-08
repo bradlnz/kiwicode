@@ -2,24 +2,34 @@
   <img src="assets/kiwicode-logo.png" alt="KiwiCode" width="160">
 </p>
 
-# KiwiCode
+<h1 align="center">KiwiCode</h1>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-4c9a63)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![CI](https://github.com/bradlnz/kiwicode/actions/workflows/go.yml/badge.svg)](https://github.com/bradlnz/kiwicode/actions/workflows/go.yml)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a63" alt="License: MIT"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&amp;logoColor=white" alt="Go"></a>
+  <a href="https://github.com/bradlnz/kiwicode/actions/workflows/go.yml"><img src="https://github.com/bradlnz/kiwicode/actions/workflows/go.yml/badge.svg" alt="CI"></a>
+</p>
 
+<p align="center">
 An open-source terminal code editor for Linux, written in Go with a CGo/libvterm
 terminal engine. Edit files, navigate symbols, run individual tests, manage Git
 changes, and work in a persistent shell from the same workspace.
+</p>
 
+<p align="center">
 KiwiCode uses direct ANSI rendering and the Go standard library, with no external
 Go module dependencies. Native dependencies and command-line tools are listed below.
+</p>
 
-[Build](#build-from-source) · [Architecture](#architecture) · [Development](#development) · [Contributing](#contributing) · [Issues](https://github.com/bradlnz/kiwicode/issues)
+<p align="center">
+  <a href="#build-from-source">Build</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a> · <a href="#contributing">Contributing</a> · <a href="https://github.com/bradlnz/kiwicode/issues">Issues</a>
+</p>
 
 ![KiwiCode editing the Taskboard API with an expanded file tree and a docked terminal](assets/screenshots/editor-explorer.png)
 
-The screenshots show the running editor and the bundled [Taskboard example](examples/taskboard).
+<p align="center">
+The screenshots show the running editor and the bundled <a href="examples/taskboard">Taskboard example</a>.
+</p>
 
 ## Build from source
 

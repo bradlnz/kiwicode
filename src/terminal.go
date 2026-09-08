@@ -175,8 +175,8 @@ func (e *editor) draw() {
 					if selected {
 						text = "> " + testRowLabel(e.tests[idx])
 					}
-				} else if len(e.tests) == 0 && y == 0 {
-					text = " No tests found"
+				} else if len(e.tests) == 0 && y == (totalHeight-1)/2 {
+					text = "No tests found"
 					rowColor = colors.muted
 				}
 			} else {
@@ -192,13 +192,16 @@ func (e *editor) draw() {
 					}
 					text = marker + e.explorerTreeLabel(explorerEntries[idx])
 				} else if len(explorerEntries) == 0 {
-					if y == 0 {
-						text = " No files found"
-					} else if y == 1 {
-						text = " " + shortcutLabel("new") + " new file"
+					if y == (totalHeight-2)/2 {
+						text = "No files found"
+					} else if y == (totalHeight-2)/2+1 {
+						text = shortcutLabel("new") + " new file"
 					}
 					rowColor = colors.muted
 				}
+			}
+			if !e.sourceMode && text != "" && (e.testMode && len(e.tests) == 0 || !e.testMode && len(explorerEntries) == 0) {
+				text = strings.Repeat(" ", max(0, (side-len([]rune(text)))/2)) + text
 			}
 			writeCell(&out, row, 1, style(selected, "\x1b[1m"+ansiFG(colors.accent), "\x1b[22m"+ansiFG(rowColor))+fit(text, side))
 			if e.testMode && !e.sourceMode && e.testTop+y < len(e.tests) {
@@ -276,10 +279,11 @@ func (e *editor) draw() {
 		}
 		writeCell(&out, 2, x, ansiBG(colors.menuActive, colors.accent, "1")+fit(title+string(e.searchInput), width))
 		if len(e.searchResults) == 0 {
-			message := " No matching files"
+			message := "No matching files"
 			if e.searchMode == "functions" {
-				message = " No matching functions"
+				message = "No matching functions"
 			}
+			message = strings.Repeat(" ", max(0, (width-len([]rune(message)))/2)) + message
 			writeCell(&out, 3, x, ansiBG(colors.menu, colors.muted, "22")+fit(message, width))
 		}
 		for i, result := range e.searchResults {

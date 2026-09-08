@@ -49,7 +49,9 @@ func TestInteractiveTerminal(t *testing.T) {
 	wait("rc_loaded:alias_loaded:tty_ready")
 	command("printf 'cwd=%s\\n' \"$PWD\"")
 	wait("cwd=" + root)
-	command("sh -c \"printf '\\123\\124\\122\\105\\101\\115\\137\\116\\117\\127'; sleep 30\"")
+	// Install the handler before announcing readiness. Forking sleep after the
+	// marker leaves a window where Ctrl+C can arrive before the child starts.
+	command("sh -c \"trap 'exit 130' INT; printf '\\123\\124\\122\\105\\101\\115\\137\\116\\117\\127'; read line\"")
 	wait("STREAM_NOW")  // Visible before the command exits.
 	e.handle(key{r: 3}) // Ctrl+C must interrupt the foreground process, not copy editor text.
 	// Wait for the fresh prompt, not a previous prompt still on screen.
@@ -61,7 +63,7 @@ func TestInteractiveTerminal(t *testing.T) {
 			interrupted.Write(event.data)
 			e.receiveTerminal(event, true)
 		case <-interruptDeadline:
-			t.Fatal("Ctrl+C did not return to the shell prompt")
+			t.Fatalf("Ctrl+C did not return to the shell prompt: status=%q output=%q", e.status, interrupted.String())
 		}
 	}
 	command("printf '\\101\\106\\124\\105\\122\\137\\111\\116\\124\\105\\122\\122\\125\\120\\124\\n'")
