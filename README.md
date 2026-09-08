@@ -1,350 +1,264 @@
 <p align="center">
-  <img src="assets/kiwicode-logo.png" alt="KiwiCode logo" width="220">
+  <img src="assets/kiwicode-logo.png" alt="KiwiCode" width="160">
 </p>
 
-<h1 align="center">KiwiCode</h1>
+# KiwiCode
 
-<p align="center">
-  <strong>A terminal-native code editor, built in Go.</strong><br>
-  Explore a codebase, edit files, find functions, and run tests in one keyboard-friendly workspace.
-</p>
+[![License: MIT](https://img.shields.io/badge/license-MIT-4c9a63)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![CI](https://github.com/bradlnz/kiwicode/actions/workflows/go.yml/badge.svg)](https://github.com/bradlnz/kiwicode/actions/workflows/go.yml)
 
-<p align="center">
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
-  <img alt="Terminal native" src="https://img.shields.io/badge/UI-terminal--native-6d286c">
-  <img alt="Built with Go" src="https://img.shields.io/badge/built_with-Go-181717?logo=go&logoColor=white">
-</p>
+An open-source terminal code editor for Linux, written in Go with a CGo/libvterm
+terminal engine. Edit files, navigate symbols, run individual tests, manage Git
+changes, and work in a persistent shell from the same workspace.
 
-![KiwiCode editing the Taskboard Go API with an expanded file explorer and multiple open tabs](assets/screenshots/editor-explorer.png)
+KiwiCode uses direct ANSI rendering and the Go standard library, with no external
+Go module dependencies. Native dependencies and command-line tools are listed below.
 
-*The included [Taskboard example](examples/taskboard), running in KiwiCode with the Forest theme.
-The file explorer is expanded and `internal/httpapi/tasks.go` is open alongside `main.go`.*
+[Build](#build-from-source) · [Architecture](#architecture) · [Development](#development) · [Contributing](#contributing) · [Issues](https://github.com/bradlnz/kiwicode/issues)
 
----
+![KiwiCode editing the Taskboard API with an expanded file tree and a docked terminal](assets/screenshots/editor-explorer.png)
 
-## Why KiwiCode?
+The screenshots show the running editor and the bundled [Taskboard example](examples/taskboard).
 
-KiwiCode brings code editing and a real shell into one keyboard-friendly workspace:
+## Build from source
 
-- Default-open interactive terminal for shell commands and coding CLIs
-- Full-screen tools such as Architecture Canvas render as tabs instead of overlays
-- Bounded streaming queues and history, batched input, coalesced rendering, and resize-event handling
-- 🌈 Syntax colours for Go, Ruby/Rails, C#, HTML/XML, JavaScript/TypeScript, Python, Rust, C/C++, Java, SQL, JSON, YAML, HCL, and more
-- ⚡ Immediate UI startup with project scanning, state restoration, and indexing off the UI thread
-- ⚡ Configurable project slots in the top-right (five by default); right-click to assign, then click or press **Alt+number** to switch
-- ⚡ Project switching retains complete workspaces (buffers, undo history, file trees and terminal sessions) in a bounded memory cache; first visits show a loading indicator
-- Workspace checkpoints and folder transitions run off the UI thread; slow switches show an animated modal over the current workspace and continue processing terminal resize events
-- Returning to a cached slot does not wait for disk checkpoints; each project's writes are ordered and pending snapshots are coalesced
-- 🔎 Fast file, symbol, member, and go-to-definition lookup
-- C# completion caches receiver types, follows simple awaited method return types, and supplies common collection/LINQ members (`members.Gr` → `GroupBy`), including continued lines and completion before parentheses
-- 🧪 Run Tests button with stop/rerun, captured results, and a test explorer for jumping to definitions
-- 🌿 Source Control with diffs, staging, guarded discard, and wrapped multiline commits
-- 🎨 Plum, Forest, Amber, and Mono themes
+Requirements:
 
-## Quick start
+- Go 1.27 or newer, as declared in [go.mod](go.mod).
+- A C compiler, `pkg-config`, and libvterm 0.3+ development headers.
+- Git, the `sqlite3` command, and `stty`.
+- A UTF-8 terminal with ANSI color support. Mouse input is supported alongside keyboard navigation.
 
-Use the Go version declared in [`go.mod`](go.mod) (currently Go 1.27), a Unix-like
-terminal with `stty`, and Git. Install the `sqlite3` command for workspace persistence.
-Building also requires a C compiler, pkg-config, and libvterm 0.3+ development
-headers (`libvterm pkgconf` on Arch; `libvterm-dev pkg-config` on Debian/Ubuntu).
+Install the native dependencies for your distribution:
 
 ```sh
-git clone git@github.com:bradlnz/kiwicode.git
+# Arch Linux / Omarchy
+sudo pacman -S --needed base-devel libvterm pkgconf git sqlite
+
+# Debian / Ubuntu
+sudo apt-get install build-essential libvterm-dev pkg-config git sqlite3
+```
+
+Install Go separately, then build:
+
+```sh
+git clone https://github.com/bradlnz/kiwicode.git
 cd kiwicode
 go build -o code-editor ./src
-
-# Launch the same codebase used in the screenshots.
 ./code-editor examples/taskboard
 ```
 
-Press **Ctrl+P** to show and focus the file explorer. Use the arrow keys to select
-and expand folders, or click them. **Enter** opens the selected file; **Tab** returns
-focus to the editor. **Ctrl+B** toggles the sidebar.
-
-Open your own project with `./code-editor /path/to/project`, or run from source:
+To install the `kiwicode` command:
 
 ```sh
-go run ./src examples/taskboard
+./build.sh
+kiwicode /path/to/project
 ```
 
-For an installed `kiwicode` command, run `./build.sh`. It tests `./src`, builds the
-editor, and installs a symlink in `${XDG_BIN_HOME:-~/.local/bin}`. Add that directory
-to your `PATH` if necessary.
+`build.sh` runs the editor tests, builds the executable, and installs a symlink in
+`${XDG_BIN_HOME:-~/.local/bin}`. Add that directory to `PATH` if needed.
+For development, `go run ./src /path/to/project` runs directly from source.
+
+## Workspace
+
+- **Files:** a collapsible tree with background refresh every 500 ms, including empty folders and external renames, additions, and deletions. Ignore rules, expansion, selection, and unsaved buffers are preserved.
+- **Navigation:** file-path search, function search, go-to-definition, and syntax-based completion. Supported syntax includes Go, C#, JavaScript/TypeScript, Python, Rust, C/C++, Java, Ruby/Rails, HTML/XML, SQL, JSON, YAML, and HCL.
+- **Tests:** project-wide and per-test Run/Stop buttons, captured results, and direct navigation to test definitions.
+- **Git:** diffs, staging, unstaging, guarded discard, commit messages, pull, push, and fetch through the Source Control view.
+- **Terminal:** a persistent PTY shell with colors, full-screen applications, mouse reporting, resizing, and scrollback. Run your existing tools and coding CLIs here.
+- **Projects:** configurable quick-pick slots retain buffers, undo history, expanded folders, and terminal sessions across cached workspace switches.
+- **Graphs:** Dependency Graph and Architecture Canvas provide selectable nodes, folder expansion, panning, zoom, and links back to source.
 
 ### Create a project
 
-Choose **File > New Project**, enter the new folder path, and press **Enter**.
-KiwiCode creates the folder and any missing parents, then opens the empty project
-with the Files explorer visible. Press **Ctrl+N** to create its first file.
-Existing paths are protected; **File > Open Folder** opens an existing project.
+Choose **File > New Project**, enter a folder path, and press **Enter**. KiwiCode
+creates the folder and any missing parents, then opens the new workspace. Existing
+paths are protected. Press **Ctrl+N** to create the first file, or use
+**File > Open Folder** to open an existing project.
 
-![New Project dialog with the destination folder entered](assets/screenshots/new-project.png)
-
-![New empty project with guidance to create its first file](assets/screenshots/empty-project.png)
-
-Empty file and test explorers show **No files found** or **No tests found**.
-Searches with no results display an explicit message.
-
-### A real example, not placeholder files
-
-[Taskboard](examples/taskboard) is a small Go HTTP API with a browser client, an
-in-memory task store, API documentation, and four Go tests. It has no external
-package dependencies, credentials, database, or cloud services.
-
-```sh
-cd examples/taskboard
-go test ./...
-go run .
-# Open http://127.0.0.1:8080 in your browser.
-```
-
-The example binds to loopback, is read-only, and resets its seeded tasks on restart.
-It is a development sample, not a production service.
-
-## See it in action
-
-These are captures of the **running editor**, not UI mock-ups. The same sample
-workspace is used throughout, and the file explorer remains visible during search.
-
-### Find a file
-
-Press **Ctrl+F** and type part of a file path. Here, `tasks` finds API code, tests,
-store code, documentation, and the browser client. Use **Up/Down** to select a
-result and **Enter** to open it; **Escape** cancels.
-
-![File search for tasks showing matching paths while the editor and expanded explorer remain visible](assets/screenshots/file-search.png)
-
-File search filters **paths**, not text inside files. Matching is case-insensitive;
-the list shows up to eight results, so narrow the query when needed.
-
-### Jump to a function
-
-Press **Ctrl+U** to search discovered functions. Results include the file path and
-line number. Searching `ListTasks` finds both implementations and the matching
-test; **Enter** jumps to the selected definition.
-
-![Function search for ListTasks showing handler, store, and test definitions with file paths and line numbers](assets/screenshots/symbol-search.png)
-
-### Explore tests
-
-Press **Ctrl+E** to open the test explorer. **Enter** opens the selected test at its
-definition. Click a row's **Run** button to run that test, or **Run Tests** in the
-top bar to run the project suite.
-
-![Test explorer with four discovered Go tests and TestListTasks open at its definition](assets/screenshots/test-explorer.png)
-
-Each row has its own Run/Stop button. Projects without discovered tests show a
-clear empty state:
-
-![Empty test explorer displaying No tests found](assets/screenshots/empty-tests.png)
-
-### Run the tests
-
-Press **Ctrl+R** or click **Run Tests**: KiwiCode detects `go test ./...`
-and displays the example's actual test output. **Ctrl+T** hides the output panel.
-
-![KiwiCode command output showing go test ./... succeeding for the Taskboard API and task store](assets/screenshots/test-run.png)
-
-Test commands capture output and display it when the command finishes.
-The separate persistent interactive terminal supports full-screen tools and
-coding CLIs; the captures above show its dock alongside the editor.
-
-## Everyday controls
+### Keyboard reference
 
 | Key | Action |
 | --- | --- |
-| Mouse | Menus, tabs, file selection, folder expansion, scrolling, and code selection |
-| `Ctrl+P` / `Ctrl+B` | Show and focus Files / toggle the explorer |
-| `Ctrl+F` / `Ctrl+U` | Search file paths / discovered functions |
+| `Ctrl+P` / `Ctrl+B` | Focus Files / toggle the explorer |
+| `Ctrl+F` / `Ctrl+U` | Search file paths / functions |
 | `Ctrl+D` | Go to definition |
-| `Ctrl+E` | Test Explorer |
-| `Ctrl+R` | Run / stop tests (editor or test output focused) |
-| `Ctrl+T` | Embedded terminal |
-| `Ctrl+K` | Format current file |
-| `Ctrl+G` | Dependency graph |
-| `Ctrl+S` / `Ctrl+Z` | Save / undo in a file tab |
+| `Ctrl+E` | Focus Tests |
+| `Ctrl+R` | Run or stop tests from the editor or test-output panel |
+| `Ctrl+T` | Toggle the terminal dock |
+| `Ctrl+N` / `Ctrl+S` | New file / save |
+| `Ctrl+Z` / `Ctrl+K` | Undo / format current file |
+| `Ctrl+G` | Dependency Graph |
+| `Alt+1` ... `Alt+9` | Switch an assigned project slot |
 | `Ctrl+W` / `Ctrl+Q` | Close tab / quit |
-| `Ctrl+O` | Shortcut help |
+| `Ctrl+O` | Show configured shortcuts |
 
-Closing a dirty tab or quitting with unsaved changes requires a second command.
-When a search or menu is open, its own navigation keys take precedence.
+Arrow keys navigate lists; **Enter** opens the selection. In the interactive
+terminal, keys such as **Ctrl+C**, **Ctrl+R**, **Tab**, and **Escape** go to the
+child application. **Ctrl+T** and project-slot shortcuts remain editor controls.
+Closing a dirty tab or quitting with unsaved edits requires a second invocation.
 
-## More of the workspace
+### Screenshots
 
-**Source Control** is available from the Source menu or the sidebar's branch icon:
-review diffs, stage changes, and compose commits. Discard operations are guarded.
+<details>
+<summary>File and symbol search</summary>
 
-Use the embedded terminal to run, build, test, debug, or launch containers with your usual shell commands.
-Click **Run Tests** in the top bar, press **Ctrl+R**, or choose **Run All Tests**
-from a test's context menu. Save edited files first.
-Each test row also has a **Run** button for that test alone, changing to **Stop**
-while it runs. Click the name to open the definition, or use the row's
-**Run / Stop Selected Test** context action. Built-in filters support Go,
-ordinary Python/C# test classes, Maven, Jest and Vitest. Custom runners and
-nested test classes can supply a selected-test command; placeholders are
-shell-quoted automatically:
+![File-path search across the Taskboard project](assets/screenshots/file-search.png)
 
-```yaml
-tests:
-  selected_command: my-runner --file {file} --test {name} --line {line}
-```
+![Function search with source paths and line numbers](assets/screenshots/symbol-search.png)
 
-The top-bar button changes to
-**Stop Tests** while running; click again after completion to rerun.
-Output appears in the bottom panel when the command finishes, including pass/fail
-or cancellation status. Clicking Stop again forces a stuck command to exit.
+</details>
 
-Root manifests select Go, Cargo, .NET, pytest, Maven, Ruby/Rake, or a JavaScript
-package's `test` script (with npm, pnpm, Yarn or Bun). For custom runners,
-monorepos, Python unittest, or watch-mode scripts, set an explicit command:
+<details>
+<summary>Per-test controls and project test output</summary>
 
-```yaml
-tests:
-  command: go test ./...
-```
+![Test explorer with individual Run buttons](assets/screenshots/test-explorer.png)
 
-Test commands run through your shell in the project directory. Ctrl+T can hide
-results; toggle it again to return to the interactive shell. The existing shell
-session remains available.
+![Captured output from the Taskboard test suite](assets/screenshots/test-run.png)
 
-**Dependency Graph** (`Ctrl+G`) shows syntactic imports and interfaces.
-**View → Architecture Canvas** shows a folder/dependency overview. Both support
-node selection and panning; they are not language-server call graphs.
+</details>
 
-**Editing** includes syntax colours for Go, Ruby/Rails, C#, JavaScript/TypeScript,
-Python, Rust, C/C++, Java, SQL, JSON, YAML, HCL, and other supported formats, plus
-word wrap, completion, and formatting. Completion and definition
-lookup use bounded syntax inference; they are not a replacement for full
-language-server type and overload resolution.
+<details>
+<summary>Project creation</summary>
 
-The file tree refreshes automatically in the background every half-second.
-Files and folders created, renamed, moved, or deleted from the terminal or other
-tools appear without reopening the project, including empty folders. Existing
-ignore rules, expanded folders, selection, and unsaved buffers are preserved.
-Large directory scans can take longer than the refresh interval.
+![New Project folder dialog](assets/screenshots/new-project.png)
 
-![KiwiCode editor with sidebar explorer](assets/kiwicode-editor-sidebar.png)
+</details>
 
-![KiwiCode node graph view](assets/kiwicode-node-view.png)
-
-Architecture Canvas and Dependency Graph show connected, selectable nodes. Click or Tab to select;
-Dependency Graph starts folder-first: click a folder (or press Enter) to expand/collapse it,
-revealing its files and subfolders. Cross-folder dependencies connect the collapsed folder nodes;
-external imports and interfaces appear as their files are revealed. Expansion is cached per project
-and does not rescan the filesystem. Architecture Canvas keeps its full overview.
-Enter opens a file/folder, arrows or background dragging pan, +/- zoom, [ and ] follow links,
-F centers the selection, and R refreshes. Graphs build in the background and are cached per project.
-Imports are syntactic, not a full language-server call graph; unresolved dependencies remain named nodes.
-Member completion also uses bounded syntax inference, not a language server: complex expression
-chains, overload resolution and exact extension-method scope are not resolved.
-Views are bounded to 400 files / 600 nodes / 2,000 links, with truncation shown in the footer.
-
-### Interactive terminal
-
-The terminal opens by default with a persistent PTY-backed `$SHELL -i` in the project directory
-(Bash by default), leaving keyboard focus in the editor. Ctrl+T toggles it.
-The terminal is docked below the editor, leaving the explorer visible. Set
-`terminal.height: 10` in YAML to choose its screen height in rows (3–100, plus a header).
-Small windows clamp the panel height to preserve room for the editor. Click either pane
-to focus it; Ctrl+T toggles the terminal without stopping its shell.
-Bash loads `~/.bashrc`, so your PATH, aliases and installed `codex`/`claude` commands are available.
-Output streams live, with terminal colours, cursor movement, alternate screens, mouse reporting,
-resizing and 1,000 lines of scrollback. Wheel-scroll shows history when the child isn't using mouse input.
-Ctrl+C, Ctrl+D, Escape, Tab and other terminal keys go to the child; Ctrl+T returns to the editor.
-Alt+number and the top bar remain project shortcuts. Hidden terminal sessions survive cached project switches;
-output queues are bounded (a busy inactive project eventually applies backpressure).
-Sessions end on editor exit or project-cache eviction; shell processes are not restored across restarts.
-Source Control operations and test runs retain captured output.
+These captures are produced by [tools/capture_readme.py](tools/capture_readme.py),
+which drives the real executable in xterm/Xvfb, checks navigation and test output,
+and verifies that the example workspace remains unchanged. See the
+[capture guide](docs/screenshots.md) for setup and provenance.
 
 ## Configuration
 
-Use a project `.code-editor.yaml` or global `~/.config/code-editor/config.yaml`.
-Project settings are read after global settings. The sample includes this layout:
+KiwiCode reads `~/.config/code-editor/config.yaml`, then the project's
+`.code-editor.yaml`. Project settings override global settings. See the
+[repository configuration](.code-editor.yaml) for the complete theme palettes,
+color roles, icons, layout options, and shortcuts.
 
 ```yaml
 theme: forest
 
+projects:
+  quick_picks: 5
+
+terminal:
+  height: 10
+
 explorer:
   max_width_percent: 35
 
-layout:
-  top_menu_padding: 2
-  tab_padding: 1
-  sidebar_tab_padding: 1
-  explorer_indent: 2
+shortcuts:
+  run_tests: ctrl+r
+  new: ctrl+n
 ```
 
-Choose `plum`, `forest`, `amber`, or `mono`; themes are also available in View.
-The `colors` section overrides individual 256-colour roles. Icons and keyboard
-shortcuts are configurable; see [the repository configuration](.code-editor.yaml).
-Layout padding values must be between 0 and 8.
+Themes are `plum`, `forest`, `amber`, and `mono`, selectable from View. Project
+slots support 1-9 assignments; right-click a slot to assign the current project.
+Terminal height is 3-100 rows, clamped to leave space for the editor.
 
-Workspace state is stored outside the project in `$XDG_STATE_HOME/code-editor`
-or `~/.local/state/code-editor`, using the `sqlite3` command.
+### Test commands
 
-## Dependency graph MCP
+Root manifests select commands for Go, Cargo, .NET, pytest, Maven, Ruby/Rake, or a
+JavaScript package's `test` script using npm, pnpm, Yarn, or Bun. Built-in per-test
+filters support Go, pytest, ordinary C# test classes, Maven, Jest, and Vitest.
 
-Expose the compact project graph to an external MCP client:
+For a custom runner, configure both commands using your project's scripts:
+
+```yaml
+tests:
+  command: ./scripts/test-all.sh
+  selected_command: ./scripts/test-one.sh {file} {name} {line}
+```
+
+`{file}` and `{name}` are shell-quoted automatically; `{line}` is the source line
+number. A custom project command disables automatic per-test command selection,
+so supply `selected_command` too. Nested test classes and unsupported runners
+also use this override.
+
+Save edited files before running tests. Results appear when the command finishes;
+Stop sends an interrupt, and a second stop forces termination. The interactive
+shell session remains available while the dock displays captured test output.
+
+### Workspace state
+
+State lives in `$XDG_STATE_HOME/code-editor` or `~/.local/state/code-editor` and
+is persisted using the `sqlite3` command. Cached workspace switches retain live
+objects in memory. Checkpoints are ordered per project and written outside the
+UI thread. Terminal processes survive cached switches, but end on exit or cache
+eviction and are not restored after restart.
+
+## Architecture
+
+| Component | Implementation |
+| --- | --- |
+| Event loop and rendering | [main.go](src/main.go), [terminal.go](src/terminal.go), and [input.go](src/input.go): direct ANSI output, batched input, coalesced frames, and resize events. |
+| Buffers and editing | [buffer.go](src/buffer.go): text storage, undo history, cursor movement, and wrapping. |
+| Terminal engine | [interactive_terminal.go](src/interactive_terminal.go): CGo bindings to libvterm, a PTY-backed shell, bounded output queues, and scrollback. |
+| Project lifecycle | [workspace.go](src/workspace.go) and [workspace_checkpoint.go](src/workspace_checkpoint.go): cached workspaces, asynchronous transitions, and ordered persistence. |
+| File indexing | [file_tree.go](src/file_tree.go): background directory snapshots, ignore filtering, and generation checks that reject stale results. |
+| Code navigation | [completion.go](src/completion.go) and [definition.go](src/definition.go): source-derived completion and definition indexes. |
+| Graph views | [node_graph.go](src/node_graph.go) and [node_canvas.go](src/node_canvas.go): bounded graph construction and interactive rendering. |
+| Test execution | [tests.go](src/tests.go) and [shell.go](src/shell.go): test discovery, runner selection, process control, and captured output. |
+
+File-tree updates use periodic scans rather than filesystem notifications; large
+scans can exceed the 500 ms interval. Completion, definitions, and dependency
+graphs use syntactic inference rather than language-server semantics. Complex
+expression chains, overload resolution, and exact extension-method scope are
+outside that model. Graph views are bounded to 400 files, 600 nodes, and 2,000
+links, with truncation reported in the UI.
+
+### MCP interface
+
+Expose the project's dependency graph to an MCP client with:
 
 ```sh
 /path/to/kiwicode/code-editor --mcp /path/to/project
 ```
 
-The server provides the `project_dependency_graph` tool over stdio.
+The server uses stdio and provides the `project_dependency_graph` tool.
 
 ## Development
-
-```text
-kiwicode/
-├── assets/             # Logo and real editor screenshots
-├── examples/taskboard/ # Runnable demo; its own Go module
-├── src/                # Editor, rendering, input, and integration tests
-├── docs/               # Performance and screenshot guides
-├── tests/              # Real-terminal smoke test and test entrypoint
-├── tools/              # Repeatable README screenshot capture
-├── build.sh            # Test, build, and install
-└── run.sh              # Run from source
-```
 
 ```sh
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
-go build -o code-editor ./src
-python3 tests/editor_terminal.py ./code-editor
-python3 tests/embedded_terminal.py ./code-editor
-
-# Nested example modules are not covered by the root ./... pattern.
-(cd examples/taskboard && go test -count=1 ./... && go vet ./...)
+go build -o /tmp/kiwicode ./src
+python3 tests/editor_terminal.py /tmp/kiwicode
+python3 tests/embedded_terminal.py /tmp/kiwicode
 ```
 
-CI runs tests, race checks, vet, the editor build, a real-terminal smoke test, and
-component benchmarks. See [performance notes](docs/performance.md); component
-measurements are not whole-editor latency claims.
+[Go CI](.github/workflows/go.yml) runs the test suite, race detector, vet, build,
+terminal smoke tests, and component benchmarks. Performance claims should be
+backed by measurements; see [performance notes](docs/performance.md).
 
-### Refresh the screenshots
+The [Taskboard example](examples/taskboard) is a separate Go module with an HTTP
+API, browser client, in-memory task store, and tests. Test or run it separately:
 
 ```sh
-# Debian/Ubuntu capture dependencies; Go is installed separately.
-sudo apt-get install xvfb xauth xterm x11-utils fonts-dejavu-core python3-pil sqlite3 libvterm-dev pkg-config
-
-go build -o code-editor ./src
-python3 tools/capture_readme.py --binary ./code-editor
+cd examples/taskboard
+go test -count=1 ./...
+go vet ./...
+go run .
+# Browse http://127.0.0.1:8080
 ```
 
-The capture script launches the real binary under xterm/Xvfb, drives the example
-with keyboard and mouse input, checks navigation and actual test output, and
-captures the X11 window. It uses a temporary copy of the example and isolated
-home/state directories, then verifies the example files were not modified.
+## Contributing
 
-See [screenshot capture and provenance](docs/screenshots.md) for dependencies,
-artifacts, assertions, and the GitHub Actions workflow.
+Bug reports, focused fixes, documentation, and tests are welcome.
+
+- [Open an issue](https://github.com/bradlnz/kiwicode/issues) with reproduction steps, expected and actual behavior, terminal, shell, OS, and Go version.
+- Discuss larger changes in an issue before implementing them.
+- Keep patches scoped to one problem and reuse the existing editor and platform primitives.
+- Add a regression check for changed behavior, run the relevant checks above, and format Go changes with `gofmt`.
+- Include updated captures for visible UI changes; the [screenshot guide](docs/screenshots.md) documents the repeatable capture workflow.
 
 ## License
 
-KiwiCode is licensed under the [MIT License](LICENSE).
-[Third-party notices](THIRD_PARTY_NOTICES.md) include the Go and libvterm licenses.
-These texts are embedded in the executable and accessible through
-**Help > About / Open Source Licenses**, even when the source checkout is absent.
-
-Clone and contribute via `github.com/bradlnz/kiwicode`.
+KiwiCode is released under the [MIT License](LICENSE). Go and libvterm retain
+their own licenses, reproduced in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The license texts are embedded in the binary and accessible through
+**Help > About / Open Source Licenses**.
