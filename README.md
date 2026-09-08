@@ -71,6 +71,20 @@ For an installed `kiwicode` command, run `./build.sh`. It tests `./src`, builds 
 editor, and installs a symlink in `${XDG_BIN_HOME:-~/.local/bin}`. Add that directory
 to your `PATH` if necessary.
 
+### Create a project
+
+Choose **File > New Project**, enter the new folder path, and press **Enter**.
+KiwiCode creates the folder and any missing parents, then opens the empty project
+with the Files explorer visible. Press **Ctrl+N** to create its first file.
+Existing paths are protected; **File > Open Folder** opens an existing project.
+
+![New Project dialog with the destination folder entered](assets/screenshots/new-project.png)
+
+![New empty project with guidance to create its first file](assets/screenshots/empty-project.png)
+
+Empty file and test explorers show **No files found** or **No tests found**.
+Searches with no results display an explicit message.
+
 ### A real example, not placeholder files
 
 [Taskboard](examples/taskboard) is a small Go HTTP API with a browser client, an
@@ -91,8 +105,6 @@ It is a development sample, not a production service.
 
 These are captures of the **running editor**, not UI mock-ups. The same sample
 workspace is used throughout, and the file explorer remains visible during search.
-The committed captures predate the new test buttons and persistent terminal;
-the controls described below reflect the current editor.
 
 ### Find a file
 
@@ -121,7 +133,10 @@ top bar to run the project suite.
 
 ![Test explorer with four discovered Go tests and TestListTasks open at its definition](assets/screenshots/test-explorer.png)
 
-The older screenshot's checkboxes have been replaced by per-test Run/Stop buttons.
+Each row has its own Run/Stop button. Projects without discovered tests show a
+clear empty state:
+
+![Empty test explorer displaying No tests found](assets/screenshots/empty-tests.png)
 
 ### Run the tests
 
@@ -132,7 +147,7 @@ and displays the example's actual test output. **Ctrl+T** hides the output panel
 
 Test commands capture output and display it when the command finishes.
 The separate persistent interactive terminal supports full-screen tools and
-coding CLIs; these are not demonstrated by the older screenshots.
+coding CLIs; the captures above show its dock alongside the editor.
 
 ## Everyday controls
 

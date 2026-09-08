@@ -22,7 +22,7 @@ type topMenu struct {
 }
 
 var topMenus = []topMenu{
-	{"File", []menuItem{{"Open File", "open-file"}, {"Open Folder", "open-folder"}, {"New File", "new"}, {"Save", "save"}, {"Close Tab", "close"}, {"Quit", "quit"}}},
+	{"File", []menuItem{{"Open File", "open-file"}, {"Open Folder", "open-folder"}, {"New Project", "new-project"}, {"New File", "new"}, {"Save", "save"}, {"Close Tab", "close"}, {"Quit", "quit"}}},
 	{"Edit", []menuItem{{"Undo", "undo"}, {"File Search", "search"}, {"Function Search", "function-search"}, {"Go to Definition", "go-to-definition"}, {"Format", "format"}}},
 	{"View", []menuItem{{"Files Explorer", "files-explorer"}, {"Test Explorer", "test-explorer"}, {"Source Control", "source-control"}, {"Word Wrap", "word-wrap"}, {"Dependency Graph", "graph"}, {"Architecture Canvas", "architecture"}, {"Terminal", "terminal"}, {"Shortcuts", "help"}, {"Theme: Plum", "theme:plum"}, {"Theme: Forest", "theme:forest"}, {"Theme: Amber", "theme:amber"}, {"Theme: Mono", "theme:mono"}}},
 	{"Source", []menuItem{{"Source Control", "source-control"}, {"Stage All", "source-stage-all"}, {"Commit…", "source-commit"}, {"Discard Selected…", "source-discard"}, {"Pull", "source-pull"}, {"Push", "source-push"}, {"Fetch", "source-fetch"}, {"Refresh", "refresh-source"}}},
@@ -297,7 +297,10 @@ func (e *editor) performAction(action string) {
 		e.openLicenses()
 	case "open-file":
 		e.openSearch("files")
+	case "new-project":
+		e.openNewProjectPrompt()
 	case "open-folder":
+		e.newProjectPrompt = false
 		e.folderPrompt, e.searchMode = true, ""
 		e.folderInput = nil
 		e.updateFolderPredictions()

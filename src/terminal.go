@@ -175,6 +175,9 @@ func (e *editor) draw() {
 					if selected {
 						text = "> " + testRowLabel(e.tests[idx])
 					}
+				} else if len(e.tests) == 0 && y == 0 {
+					text = " No tests found"
+					rowColor = colors.muted
 				}
 			} else {
 				idx := e.explorerTop + y
@@ -188,6 +191,13 @@ func (e *editor) draw() {
 						marker = "> "
 					}
 					text = marker + e.explorerTreeLabel(explorerEntries[idx])
+				} else if len(explorerEntries) == 0 {
+					if y == 0 {
+						text = " No files found"
+					} else if y == 1 {
+						text = " " + shortcutLabel("new") + " new file"
+					}
+					rowColor = colors.muted
 				}
 			}
 			writeCell(&out, row, 1, style(selected, "\x1b[1m"+ansiFG(colors.accent), "\x1b[22m"+ansiFG(rowColor))+fit(text, side))
@@ -265,6 +275,13 @@ func (e *editor) draw() {
 			title = " Search functions: "
 		}
 		writeCell(&out, 2, x, ansiBG(colors.menuActive, colors.accent, "1")+fit(title+string(e.searchInput), width))
+		if len(e.searchResults) == 0 {
+			message := " No matching files"
+			if e.searchMode == "functions" {
+				message = " No matching functions"
+			}
+			writeCell(&out, 3, x, ansiBG(colors.menu, colors.muted, "22")+fit(message, width))
+		}
 		for i, result := range e.searchResults {
 			resultStyle := ansiBG(colors.menu, colors.text, "22")
 			if i == e.searchSelected {
@@ -276,9 +293,13 @@ func (e *editor) draw() {
 	if e.folderPrompt {
 		width := min(70, e.cols-4)
 		x := max(2, (e.cols-width)/2)
-		writeCell(&out, 2, x, ansiBG(colors.menuActive, colors.accent, "1")+fit(" Open folder", width))
+		title, hint := " Open folder", " ↑↓ choose · Tab complete · Enter open · Esc cancel"
+		if e.newProjectPrompt {
+			title, hint = " New project folder", " Tab complete parent · Enter create · Esc cancel"
+		}
+		writeCell(&out, 2, x, ansiBG(colors.menuActive, colors.accent, "1")+fit(title, width))
 		writeCell(&out, 3, x, ansiBG(colors.menu, colors.text, "22")+fit(" Path: "+string(e.folderInput), width))
-		writeCell(&out, 4, x, ansiBG(colors.menu, colors.muted, "2")+fit(" ↑↓ choose · Tab complete · Enter open · Esc cancel", width))
+		writeCell(&out, 4, x, ansiBG(colors.menu, colors.muted, "2")+fit(hint, width))
 		for index, prediction := range e.folderPredictions {
 			predictionStyle := ansiBG(colors.menu, colors.text, "22")
 			if index == e.folderPredictionSelected {

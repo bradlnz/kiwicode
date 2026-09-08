@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+func TestExplorerEmptyStates(t *testing.T) {
+	e := &editor{rows: 30, cols: 100, showExplorer: true, testMode: true, buffers: []*buffer{newBuffer("empty.txt", nil)}}
+	e.draw()
+	if !strings.Contains(e.lastFrame, "No tests found") {
+		t.Fatal("empty test explorer must explain that no tests were found")
+	}
+	e.testMode = false
+	e.draw()
+	if !strings.Contains(e.lastFrame, "No files found") || !strings.Contains(e.lastFrame, shortcutLabel("new")+" new file") {
+		t.Fatal("empty file explorer must show a message and how to create a file")
+	}
+	for _, mode := range []string{"files", "functions"} {
+		e.openSearch(mode)
+		e.draw()
+		if !strings.Contains(e.lastFrame, "No matching "+mode) {
+			t.Fatalf("empty %s search must explain there are no matches", mode)
+		}
+	}
+}
+
 func TestRunTestsButton(t *testing.T) {
 	oldSettings := settings
 	t.Cleanup(func() { settings = oldSettings })

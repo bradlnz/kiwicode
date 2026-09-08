@@ -1,7 +1,7 @@
 {
   "renderer": "Real editor PTY -> xterm under Xvfb -> Pillow X11 window capture",
-  "source_commit": "8f73f84550a9faa9cd2b6bdc94348f378d6f2382",
-  "binary_sha256": "d53747255decd1eabc4a067ec385b0076133065f6cab330caeea64e60435b29a",
+  "source_commit": "local working tree",
+  "binary_sha256": "fdd0280ae7e0ff0ade5a0dcf2f4f7a8b46649f170440e6bd5fbd3cf8b2131680",
   "columns": 144,
   "rows": 42,
   "example": "examples/taskboard",
@@ -10,8 +10,8 @@
     {
       "file": "editor-explorer.png",
       "width": 1464,
-      "height": 864,
-      "sha256": "1485ac85f4a8d13cf8ffd1fbad05673584f31097c88780e9d6aa05af87ecd3d0",
+      "height": 948,
+      "sha256": "1563c2510b94436a3c61440d4d92916b641d11e393711a81a5ac809c37c12779",
       "assertions": [
         "main.go",
         "tasks_test.go",
@@ -22,8 +22,8 @@
     {
       "file": "file-search.png",
       "width": 1464,
-      "height": 864,
-      "sha256": "69b4db0e49065dc20c351d4e900b6657b43e45d951dc93f763bd42b0242e89d2",
+      "height": 948,
+      "sha256": "902d7d91ecf9863be56e0f8379ded85944056b08735d27c33de5fefe9f276e83",
       "assertions": [
         "Search files: tasks",
         "internal/httpapi/tasks.go",
@@ -33,8 +33,8 @@
     {
       "file": "symbol-search.png",
       "width": 1464,
-      "height": 864,
-      "sha256": "e4181c0fb5ab7e92eca4c7a9a162352bbcf3624b1e90fbfa1818e6f83e041b2a",
+      "height": 948,
+      "sha256": "71bddf8ed7ca8a3e833f67dbaa939ac652a3a6be00e4ba35d907834f71925a34",
       "assertions": [
         "Search functions: ListTasks",
         "internal/httpapi/tasks.go:",
@@ -44,8 +44,8 @@
     {
       "file": "test-explorer.png",
       "width": 1464,
-      "height": 864,
-      "sha256": "d3db1e1bfe4225c23d62d43370dabc5cd8765e5655e4a39e5cf1ec8545788c9f",
+      "height": 948,
+      "sha256": "29f86e97fe1f3ead3f6eb75cfb2c68c8f5ec36555df8eae88b72467cfd5c53ec",
       "assertions": [
         "TestListTasks",
         "TestHealth",
@@ -57,12 +57,43 @@
     {
       "file": "test-run.png",
       "width": 1464,
-      "height": 864,
-      "sha256": "23b6a06d8bd099bab94a9cb69c52f6421b3afa2bb0bbe9b2641b190f4dc71351",
+      "height": 948,
+      "sha256": "a130f45d48e63c6fccdcba0a265dfa5c2b8849ea5d63f8d605cdbf06f4a81c89",
       "assertions": [
         "$ go test ./...",
         "ok   example.com/kiwi-taskboard/internal/httpapi",
         "ok   example.com/kiwi-taskboard/internal/tasks"
+      ]
+    },
+    {
+      "file": "new-project.png",
+      "width": 1464,
+      "height": 948,
+      "sha256": "1d35f9603a2ca4a771bf78c144309bb99f0a053f9e14d47c2ab5718ff3b821aa",
+      "assertions": [
+        "New project folder",
+        "~/projects/hello-world",
+        "Enter create"
+      ]
+    },
+    {
+      "file": "empty-project.png",
+      "width": 1464,
+      "height": 948,
+      "sha256": "6e02a5bd27a780487731b54186b4a42535d511fc2aec8039fbb15b8d4751880b",
+      "assertions": [
+        "No files found",
+        "Ctrl+N new file",
+        "untitled.txt"
+      ]
+    },
+    {
+      "file": "empty-tests.png",
+      "width": 1464,
+      "height": 948,
+      "sha256": "5df82697f98398eb15bc7fbd879dfb35723caa96077279775b0f32c9133141b0",
+      "assertions": [
+        "No tests found"
       ]
     }
   ]

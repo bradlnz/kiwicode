@@ -43,7 +43,7 @@ def bridge(address: str, binary: str, workspace: str) -> None:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     state = str(Path(workspace).parent / "state")
-    env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
+    env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "GOCACHE") if key in os.environ}
     env.update(HOME=str(Path(workspace).parent / "home"),
                XDG_STATE_HOME=state, XDG_CONFIG_HOME=state + "/config",
                TERM="xterm-256color", SHELL="/bin/sh",
@@ -224,6 +224,16 @@ def capture(binary: Path, example: Path, output: Path) -> None:
                                 "ok   example.com/kiwi-taskboard/internal/httpapi",
                                 "ok   example.com/kiwi-taskboard/internal/tasks")
                 session.press(b"\x14", "Hide test output")
+
+                session.click(3, 1, "Open File menu", "New Project")
+                session.click(3, 4, "Create a new project", "New project folder")
+                session.press(b"\x7f" * (len(str(temporary)) + 1) + b"~/projects/hello-world",
+                              "Choose the new project folder", "~/projects/hello-world")
+                session.capture("new-project", "New project folder", "~/projects/hello-world", "Enter create")
+                session.press(b"\r", "Create and open the project", "No files found", "Ctrl+N new file")
+                session.capture("empty-project", "No files found", "Ctrl+N new file", "untitled.txt")
+                session.press(b"\x05", "Show empty test explorer", "No tests found")
+                session.capture("empty-tests", "No tests found")
                 session.connection.sendall(b"\x11")
                 terminal.wait(timeout=10)
                 if terminal.returncode != 0:

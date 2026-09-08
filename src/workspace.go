@@ -62,8 +62,16 @@ func workspacePath(root, path string) string {
 	return filepath.Join(root, path)
 }
 
-func (e *editor) switchWorkspace(path string) {
+func (e *editor) switchWorkspace(path string, create bool) {
 	if e.switching != nil {
+		return
+	}
+	if e.workspaceDone != nil {
+		e.status = "Workspace is still loading"
+		return
+	}
+	if e.shell.running {
+		e.status = "Stop the running command before opening a folder"
 		return
 	}
 	transition := &workspaceSwitch{done: make(chan *editor, 1), started: time.Now(), quitKey: 17, backdrop: e.lastFrame, colors: colors}
@@ -78,7 +86,7 @@ func (e *editor) switchWorkspace(path string) {
 	worker := *e
 	e.switching = transition
 	go func() {
-		worker.switchWorkspaceNow(path)
+		worker.switchWorkspaceNow(path, create)
 		worker.visibleTree() // Build the first explorer layout off the UI thread.
 		transition.done <- &worker
 	}()
@@ -113,7 +121,7 @@ func (e *editor) finishWorkspaceSwitch(loaded *editor) {
 	e.rows, e.cols = rows, cols
 }
 
-func (e *editor) switchWorkspaceNow(path string) {
+func (e *editor) switchWorkspaceNow(path string, create bool) {
 	path = expandFolderPath(strings.TrimSpace(path))
 	path, err := filepath.Abs(path)
 	if err != nil {
@@ -121,11 +129,20 @@ func (e *editor) switchWorkspaceNow(path string) {
 		return
 	}
 	current := mustCwd()
-	if path == current {
+	if path == current && !create {
 		return
 	}
 	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
+	if create {
+		if err == nil {
+			e.status = "Project path already exists; use Open Folder or choose a new path"
+			return
+		}
+		if !os.IsNotExist(err) {
+			e.status = "New project failed: " + err.Error()
+			return
+		}
+	} else if err != nil || !info.IsDir() {
 		e.status = "Folder not found: " + path
 		return
 	}
@@ -134,6 +151,9 @@ func (e *editor) switchWorkspaceNow(path string) {
 		cache = make(map[string]cachedWorkspace)
 	}
 	next, warm := cache[path]
+	if create {
+		warm = false
+	}
 	data, err := e.stateJSON()
 	if err != nil {
 		e.status = "Cache workspace failed: " + err.Error()
@@ -165,6 +185,16 @@ func (e *editor) switchWorkspaceNow(path string) {
 			break
 		}
 	}
+	if create {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			e.status = "New project failed: " + err.Error()
+			return
+		}
+		if err := os.Mkdir(path, 0755); err != nil {
+			e.status = "New project failed: " + err.Error()
+			return
+		}
+	}
 	if err := os.Chdir(path); err != nil {
 		e.status = "Open folder failed: " + err.Error()
 		return
@@ -173,6 +203,7 @@ func (e *editor) switchWorkspaceNow(path string) {
 	parked := *e
 	parked.workspaces = nil
 	parked.popup, parked.folderPrompt, parked.searchMode = nil, false, ""
+	parked.newProjectPrompt = false
 	parked.selection.selecting = false
 	parked.quitArmed, parked.closeArmed = false, nil
 	cache[current] = cachedWorkspace{parked, settings, colors}
@@ -191,7 +222,13 @@ func (e *editor) switchWorkspaceNow(path string) {
 	}
 	configErr := loadSettings()
 	loaded := newEditor()
-	stateErr := loaded.restoreState()
+	var stateErr error
+	if create {
+		loaded.showExplorer, loaded.explorer = true, true
+		loaded.status = "Created project: " + path
+	} else {
+		stateErr = loaded.restoreState()
+	}
 	loaded.workspaces = cache
 	*e = *loaded
 	e.rows, e.cols = rows, cols

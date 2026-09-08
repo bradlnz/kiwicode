@@ -41,16 +41,18 @@ verified interaction sequence, not guaranteed identical pixels across machines.
 | `symbol-search.png` | Search `ListTasks`, confirm implementation paths and line numbers, and jump to the handler definition. |
 | `test-explorer.png` | Discover four Go tests and open `TestListTasks` at its definition. |
 | `test-run.png` | Run all tests with Ctrl+R and observe actual successful `go test ./...` output. |
+| `new-project.png` | Open File > New Project and enter a new folder path. |
+| `empty-project.png` | Create the project and show the empty Files explorer with first-file guidance. |
+| `empty-tests.png` | Open Tests in the new project and show the No tests found message. |
 
 Each capture asserts expected text in the current real terminal frame before
 reading pixels from X11. Unexpected configuration errors, panics, command errors,
 and failed tests stop the capture. The script checks that the example workspace
 is byte-for-byte unchanged after the editor exits.
 
-The committed images predate the per-test Run/Stop buttons and persistent
-interactive terminal. Their checkboxes meant **selected to run**, not **passed**.
-The updated capture sequence uses Ctrl+R and waits for the captured test result;
-the separate interactive terminal supports a persistent PTY shell.
+The test explorer shows per-test Run/Stop buttons. The capture sequence uses
+Ctrl+R and waits for the captured test result; the separate interactive terminal
+supports a persistent PTY shell. Project creation occurs inside the isolated HOME.
 File search filters paths; function search uses discovered definitions. Neither
 screenshot represents a full-text repository search.
 
@@ -59,7 +61,8 @@ screenshot represents a full-text repository search.
 The script copies only the bundled example into a temporary directory. It uses a
 separate HOME and state directory and does not read a user's saved editor state.
 The editor process receives a small environment allowlist; model configuration
-and provider credentials are not inherited. No provider is called. The only
+and provider credentials are not inherited. GOCACHE may be supplied to reuse
+compiled Go packages while HOME and editor state remain isolated. No provider is called. The only
 command run through the UI is the included example's `go test ./...`.
 
 `capture.json` records the source commit supplied by `KIWICODE_SOURCE_COMMIT`,
@@ -75,12 +78,12 @@ Do not replace the sample with confidential source for public documentation.
 ## GitHub Actions
 
 [`readme-screenshots.yml`](../.github/workflows/readme-screenshots.yml) builds with
-the repository's Go version, tests and vets the sample, captures the five views,
+the repository's Go version, tests and vets the sample, captures the eight views,
 and uploads the screenshots and diagnostic evidence as `readme-screenshots`.
 It runs for relevant pull requests and can also be run manually.
 
 A narrowly scoped publishing job is enabled only for pushes to the documentation
-capture branch `docs/readme-editor-tour`. It commits only the five PNGs and their
+capture branch `docs/readme-editor-tour`. It commits only the eight PNGs and their
 manifest to that same branch, without force-pushing. The capture job has read-only
 repository permissions; only the publishing job has contents-write permission.
 Manual runs and pull requests do **not** auto-commit, and nothing in this workflow

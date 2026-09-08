@@ -67,6 +67,7 @@ type editor struct {
 	searchResults             []searchResult
 	searchSelected            int
 	folderPrompt              bool
+	newProjectPrompt          bool
 	folderInput               []rune
 	folderPredictions         []string
 	folderPredictionSelected  int
@@ -847,18 +848,7 @@ func isTestFile(path string) bool {
 }
 
 func (e *editor) openFolder(path string) {
-	if e.switching != nil {
-		return
-	}
-	if e.workspaceDone != nil {
-		e.status = "Workspace is still loading"
-		return
-	}
-	if e.shell.running {
-		e.status = "Stop the running command before opening a folder"
-		return
-	}
-	e.switchWorkspace(path)
+	e.switchWorkspace(path, false)
 }
 
 func (e *editor) openProjectSlot(index int) {
@@ -894,10 +884,27 @@ func (e *editor) setProjectSlot(index int) {
 	e.status = fmt.Sprintf("Project %d set to %s", index+1, current)
 }
 
+func (e *editor) openNewProjectPrompt() {
+	e.folderPrompt, e.newProjectPrompt, e.searchMode = true, true, ""
+	e.folderInput = []rune(filepath.Dir(mustCwd()) + string(filepath.Separator))
+	e.updateFolderPredictions()
+}
+
 func (e *editor) handleFolderPrompt(k key) {
 	switch k.code {
 	case keyEnter:
 		path := string(e.folderInput)
+		if e.newProjectPrompt {
+			if strings.TrimSpace(path) == "" {
+				e.status = "Enter a new project folder path"
+				return
+			}
+			e.switchWorkspace(path, true)
+			if e.switching != nil {
+				e.folderPrompt, e.newProjectPrompt = false, false
+			}
+			return
+		}
 		if e.folderPredictionSelected >= 0 && e.folderPredictionSelected < len(e.folderPredictions) {
 			path = e.folderPredictions[e.folderPredictionSelected]
 		}
@@ -925,6 +932,7 @@ func (e *editor) handleFolderPrompt(k key) {
 	default:
 		if k.r == 0 {
 			e.folderPrompt, e.folderPredictions = false, nil
+			e.newProjectPrompt = false
 		} else if k.r >= 32 {
 			e.folderInput = append(e.folderInput, k.r)
 			e.updateFolderPredictions()
