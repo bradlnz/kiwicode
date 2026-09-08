@@ -49,16 +49,6 @@ sudo pacman -S --needed base-devel libvterm pkgconf git sqlite
 # Debian / Ubuntu
 sudo apt-get install build-essential libvterm-dev pkg-config git sqlite3
 ```
-
-Install Go separately, then build:
-
-```sh
-git clone https://github.com/bradlnz/kiwicode.git
-cd kiwicode
-go build -o code-editor ./src
-./code-editor examples/taskboard
-```
-
 To install the `kiwicode` command:
 
 ```sh
