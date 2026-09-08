@@ -81,6 +81,11 @@ type editor struct {
 	completionDone            chan completionResult
 	completionGeneration      int
 	completionDirty           bool
+	completionBuffer          *buffer
+	completionRow             int
+	completionCol             int
+	completionSelected        int
+	completionDismissed       bool
 	definitionLoading         bool
 	definitionDone            chan definitionResult
 	workspaceDone             chan editorLoad
@@ -293,6 +298,9 @@ func (e *editor) handle(k key) bool {
 		e.handleExplorer(k)
 	} else {
 		b := e.current()
+		if e.handleCompletionKey(k) {
+			return false
+		}
 		_, _, memberBefore := memberAccessAtCursor(b)
 		editing := k.r >= 32 || k.code == keyEnter || k.code == keyBackspace || k.code == keyDelete || k.code == keyTab
 		if e.selection.buffer == b && !e.selection.empty() {

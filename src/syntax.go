@@ -323,6 +323,43 @@ func paint(color int, text string) string { return ansiFG(color) + text + ansiFG
 
 func typeStarts(ext string, line []rune) map[int]bool {
 	result := map[int]bool{}
+	if ext == ".cs" {
+		// ponytail: recognize generic syntax on this line; semantic disambiguation needs an LSP.
+		for open := 1; open < len(line); open++ {
+			if line[open] != '<' {
+				continue
+			}
+			before := open - 1
+			for before >= 0 && unicode.IsSpace(line[before]) {
+				before--
+			}
+			if before < 0 || !identifierRune(line[before]) {
+				continue
+			}
+			end, depth := open+1, 1
+			for end < len(line) && depth > 0 {
+				value := line[end]
+				if value == '<' {
+					depth++
+				} else if value == '>' {
+					depth--
+				} else if !identifierRune(value) && !unicode.IsSpace(value) && !strings.ContainsRune(",.?[]:", value) {
+					break
+				}
+				end++
+			}
+			if depth != 0 && end != len(line) {
+				continue
+			}
+			for _, word := range identifierPositions(line, open+1, end) {
+				if !languageSyntaxes[ext].keywords[word.word] && nextRune(line, word.start+len([]rune(word.word))) != '.' {
+					result[word.start] = true
+				}
+			}
+			open = end - 1
+		}
+		return result
+	}
 	if ext != ".go" {
 		return result
 	}

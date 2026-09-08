@@ -31,6 +31,31 @@ Go module dependencies. Native dependencies and command-line tools are listed be
 The screenshots show the running editor and the bundled <a href="examples/taskboard">Taskboard example</a>.
 </p>
 
+## Install a release
+
+Extract the Linux archive for your CPU, then run its installer:
+
+```sh
+sha256sum -c kiwicode-linux-amd64.tar.gz.sha256
+tar -xzf kiwicode-linux-amd64.tar.gz
+cd kiwicode-linux-amd64
+./install.sh
+kiwicode /path/to/project
+```
+
+The archive bundles the editor, libvterm, licenses, and Taskboard example. No Go
+compiler or development headers are needed. The installer installs missing Git,
+SQLite and coreutils using apt, pacman or dnf (with sudo when needed). Language
+toolchains for building/testing your own projects are installed separately.
+
+The command goes in `${XDG_BIN_HOME:-~/.local/bin}`, with files under
+`${XDG_DATA_HOME:-~/.local/share}/kiwicode`. Add the command directory to `PATH` if
+needed. You can remove the extracted archive directory after installation. Running
+a newer release's installer updates the command; previous installation directories
+remain available under the data directory. Existing editor configuration is retained.
+Releases require the same CPU architecture and a glibc version at least as new as
+the system used to build them.
+
 ## Build from source
 
 Requirements:
@@ -59,6 +84,10 @@ kiwicode /path/to/project
 `build.sh` runs the editor tests, builds the executable, and installs a symlink in
 `${XDG_BIN_HOME:-~/.local/bin}`. Add that directory to `PATH` if needed.
 For development, `go run ./src /path/to/project` runs directly from source.
+
+To bundle a release, run `./release.sh` on the oldest Linux/glibc system you want
+to support. It tests and builds for the native CPU, then writes
+`dist/kiwicode-linux-<arch>.tar.gz` and its SHA-256 checksum. Distribute both files.
 
 ## Workspace
 
@@ -98,6 +127,14 @@ Arrow keys navigate lists; **Enter** opens the selection. In the interactive
 terminal, keys such as **Ctrl+C**, **Ctrl+R**, **Tab**, and **Escape** go to the
 child application. **Ctrl+T** and project-slot shortcuts remain editor controls.
 Closing a dirty tab or quitting with unsaved edits requires a second invocation.
+
+While typing code, a completion dropdown filters keywords, words in the current
+buffer, and indexed project types/interfaces, starting with one letter (for example,
+`private readonly I` in C#). Object access such as `service.` shows members.
+Use **Up/Down** to select, **Tab/Enter** to accept, or **Escape** to dismiss and
+continue editing. Completion also works before punctuation and uses unsaved open
+files when building the project index; external SDK types require language-server
+support and are not generally indexed.
 
 ### Screenshots
 

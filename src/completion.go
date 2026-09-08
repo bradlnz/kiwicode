@@ -152,26 +152,11 @@ func completionFamily(ext string) string {
 
 func (e *editor) suggestion() []rune {
 	b := e.current()
+	if candidates := e.completionSuggestions(); len(candidates) > 0 {
+		return []rune(candidates[e.completionSelected])[len([]rune(b.completionPrefix())):]
+	}
 	if completionFamily(filepath.Ext(b.path)) == "" {
 		return b.suggestion()
-	}
-	_, _, memberAccess := memberAccessAtCursor(b)
-	if e.completionCache == nil {
-		e.completionCache = map[string]dependencyCompletion{}
-	}
-	completion, cached := e.completionCache[b.path]
-	if !memberAccess {
-		if cached {
-			return dependencySuggestion(b, completion)
-		}
-		return b.suggestion()
-	}
-	if cached && !e.completionDirty && (filepath.Ext(b.path) != ".cs" || completion.receivers != nil) {
-		return dependencySuggestion(b, completion)
-	}
-	e.loadMembersInBackground(b.path)
-	if cached {
-		return dependencySuggestion(b, completion)
 	}
 	return nil
 }
@@ -478,12 +463,57 @@ func dependencyCandidates(b *buffer, completion dependencyCompletion) []string {
 	return matches
 }
 
-func (e *editor) memberSuggestions() []string {
-	completion, ok := e.completionCache[e.current().path]
-	if !ok {
+func (e *editor) completionSuggestions() []string {
+	b := e.current()
+	if e.completionBuffer != b || e.completionRow != b.row || e.completionCol != b.col {
+		e.completionSelected, e.completionDismissed = 0, false
+		e.completionBuffer, e.completionRow, e.completionCol = b, b.row, b.col
+	}
+	if e.completionDismissed || completionFamily(filepath.Ext(b.path)) == "" || !e.selection.empty() {
 		return nil
 	}
-	return dependencyCandidates(e.current(), completion)
+	completion, cached := e.completionCache[b.path]
+	_, _, member := memberAccessAtCursor(b)
+	// Reuse the project index while typing words; member inference needs fresh receiver types.
+	if member || !cached && b.completionPrefix() != "" {
+		e.loadMembersInBackground(b.path)
+	}
+	var candidates []string
+	if member {
+		candidates = dependencyCandidates(b, completion)
+	} else {
+		candidates = b.wordCandidates(completion.words)
+	}
+	e.completionSelected = min(e.completionSelected, max(0, len(candidates)-1))
+	return candidates
+}
+
+func (e *editor) handleCompletionKey(k key) bool {
+	if k.code != keyUp && k.code != keyDown && k.code != keyTab && k.code != keyEnter && (k.r != 0 || k.code != 0) {
+		return false
+	}
+	candidates := e.completionSuggestions()
+	if len(candidates) == 0 {
+		return false
+	}
+	switch {
+	case k.code == keyUp:
+		e.completionSelected = (e.completionSelected + len(candidates) - 1) % len(candidates)
+	case k.code == keyDown:
+		e.completionSelected = (e.completionSelected + 1) % len(candidates)
+	case k.code == keyTab || k.code == keyEnter:
+		b := e.current()
+		b.insert([]rune(candidates[e.completionSelected])[len([]rune(b.completionPrefix())):])
+		e.markCompletionDirty()
+		e.completionBuffer, e.completionRow, e.completionCol = b, b.row, b.col
+		e.completionDismissed = true
+		e.status = "Suggestion accepted"
+	case k.r == 0 && k.code == 0:
+		e.completionDismissed = true
+	default:
+		return false
+	}
+	return true
 }
 
 func memberAccessAtCursor(b *buffer) (receiver, prefix string, ok bool) {

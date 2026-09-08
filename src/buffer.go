@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -284,22 +285,34 @@ func (b *buffer) undoChange() bool {
 func (b *buffer) suggestion() []rune { return b.suggestionWith(nil) }
 
 func (b *buffer) suggestionWith(extra []string) []rune {
-	line := b.lines[b.row]
-	if b.col != len(line) {
+	candidates := b.wordCandidates(extra)
+	if len(candidates) == 0 {
 		return nil
+	}
+	return []rune(candidates[0])[len([]rune(b.completionPrefix())):]
+}
+
+func (b *buffer) completionPrefix() string {
+	line := b.lines[b.row]
+	if b.col < 0 || b.col > len(line) || b.col < len(line) && identifierRune(line[b.col]) {
+		return ""
 	}
 	start := b.col
-	for start > 0 && (unicode.IsLetter(line[start-1]) || unicode.IsDigit(line[start-1]) || line[start-1] == '_') {
+	for start > 0 && identifierRune(line[start-1]) {
 		start--
 	}
-	prefix := string(line[start:b.col])
-	if len([]rune(prefix)) < 2 {
+	return string(line[start:b.col])
+}
+
+func (b *buffer) wordCandidates(extra []string) []string {
+	prefix := b.completionPrefix()
+	if prefix == "" {
 		return nil
 	}
-	best := ""
+	words := map[string]bool{}
 	consider := func(word string) {
-		if word != prefix && strings.HasPrefix(word, prefix) && (best == "" || len(word) < len(best) || len(word) == len(best) && word < best) {
-			best = word
+		if word != prefix && strings.HasPrefix(word, prefix) {
+			words[word] = true
 		}
 	}
 	if syntax, ok := languageSyntaxes[strings.ToLower(filepath.Ext(b.path))]; ok {
@@ -317,10 +330,14 @@ func (b *buffer) suggestionWith(extra []string) []rune {
 	for _, word := range extra {
 		consider(word)
 	}
-	if best == "" {
-		return nil
+	var matches []string
+	for word := range words {
+		matches = append(matches, word)
 	}
-	return []rune(best)[len([]rune(prefix)):]
+	sort.Slice(matches, func(i, j int) bool {
+		return len(matches[i]) < len(matches[j]) || len(matches[i]) == len(matches[j]) && matches[i] < matches[j]
+	})
+	return matches
 }
 
 func (b *buffer) clampCol() {

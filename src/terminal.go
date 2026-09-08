@@ -362,25 +362,27 @@ func (e *editor) draw() {
 				}
 			}
 		}
-		if suggestion := e.suggestion(); len(suggestion) > 0 && y >= 3 && y < 3+contentHeight && x <= editorX+editorWidth {
+		if suggestion := e.suggestion(); len(suggestion) > 0 && b.col == len(b.lines[b.row]) && y >= 3 && y < 3+contentHeight && x <= editorX+editorWidth {
 			writeCell(&out, y, x, "\x1b[2;37m"+fit(string(suggestion), editorX+editorWidth-x+1))
 		}
-		if members := e.memberSuggestions(); len(members) > 0 && y >= 3 && y < 3+contentHeight {
-			count, width := min(7, len(members)), len(" Tab  accept ")
-			for _, member := range members[:count] {
+		if members := e.completionSuggestions(); len(members) > 0 && y >= 3 && y < 3+contentHeight && contentHeight > 1 {
+			below, above := 2+contentHeight-y, y-3
+			count, width := min(7, len(members), max(below, above)), len(" Tab/Enter accept ")
+			first := max(0, e.completionSelected-count+1)
+			for _, member := range members[first : first+count] {
 				width = max(width, len([]rune(member))+3)
 			}
 			width = min(width, editorWidth)
 			popupX := min(max(editorX+1, x), editorX+editorWidth-width+1)
 			popupY := y + 1
-			if popupY+count >= 3+contentHeight {
-				popupY = max(3, y-count)
+			if count > below {
+				popupY = y - count
 			}
-			for index, member := range members[:count] {
+			for index, member := range members[first : first+count] {
 				label := "   " + member
 				itemStyle := ansiBG(colors.menu, colors.text, "22")
-				if index == 0 {
-					label = " ▸ " + member + "  Tab"
+				if first+index == e.completionSelected {
+					label = " ▸ " + member
 					itemStyle = ansiBG(colors.menuActive, colors.text, "1")
 				}
 				writeCell(&out, popupY+index, popupX, itemStyle+fit(label, width))

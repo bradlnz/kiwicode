@@ -20,6 +20,10 @@ def main() -> None:
         root = Path(directory)
         source = root / "sample.txt"
         source.write_text("sample text\n", encoding="utf-8")
+        handler = root / "zz-handler.cs"
+        handler.write_text("", encoding="utf-8")
+        (root / "zz-service.cs").write_text(
+            "public interface IReader {}\npublic interface IWriter {}\n", encoding="utf-8")
         env = dict(os.environ)
         env.update(HOME=directory, XDG_STATE_HOME=str(root / "state"),
                    SHELL="/bin/bash", PATH="/usr/bin:/bin", TERM="xterm-256color")
@@ -79,6 +83,16 @@ def main() -> None:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 26, 90, 0, 0))
             os.kill(process.pid, signal.SIGWINCH)
             expect("\x1b[26;1H")  # No keypress: idle resize must redraw.
+            send(b"\x06zz-handler\r")  # Find and open the C# file.
+            expect("zz-handler.cs")
+            drain()
+            send(b"private readonly I")
+            expect("▸ IReader")
+            send(b"\x1b[B")
+            expect("▸ IWriter")
+            send(b"\r\x13")
+            expect("Saved")
+            assert handler.read_text(encoding="utf-8") == "private readonly IWriter"
             send(b"\x11")
             expect("Unsaved changes")
             send(b"\x11")
@@ -88,7 +102,7 @@ def main() -> None:
             assert source.read_text(encoding="utf-8") == "sample text\n"
             assert termios.tcgetattr(slave) == original, "terminal mode was not restored"
             assert b"\x1b[?2004l" in transcript, "bracketed paste was not disabled on exit"
-            print("PASS: editor-only tabs, retired shortcuts, bracketed paste/undo, idle resize, guarded quit, terminal restoration")
+            print("PASS: editor tabs, paste/undo, idle resize, interface dropdown selection/acceptance, guarded quit, terminal restoration")
         finally:
             if process.poll() is None:
                 process.kill()
