@@ -188,7 +188,7 @@ def capture(binary: Path, example: Path, output: Path) -> None:
                     header.extend(connection.recv(1))
                 connection.settimeout(None)
                 session = Session(connection, header.decode().strip(), output)
-                session.expect(".code-editor.yaml", "Shortcuts")
+                session.expect(".code-editor.yaml", "TERMINAL")
                 session.press(b"\x06", "Open file search", "Search files:")
                 session.press(b"main.go", "Find main.go", "Search files: main.go")
                 session.press(b"\r", "Open main.go", "func main()")
@@ -216,14 +216,14 @@ def capture(binary: Path, example: Path, output: Path) -> None:
                 session.press(b"\r", "Jump to TestListTasks", "Ln 12, Col 1")
                 session.capture("test-explorer", "TestListTasks", "TestHealth", "TestSeedTasks", "TestTasksAreCopied", "httptest.NewRequest")
 
-                session.press(b"\x05", "Focus test explorer", "Tests: Space toggle")
+                session.press(b"\x05", "Focus test explorer", "Tests: click or Enter to open")
                 start = len(session.transcript)
-                session.press(b"r", "Run the checked example tests", "Running: go test ./...")
-                session.expect("TERMINAL · Esc close", since=start, timeout=90)
+                session.press(b"\x12", "Run all example tests", "Tests: go test ./...")
+                session.expect("Tests passed", since=start, timeout=90)
                 session.capture("test-run", "$ go test ./...",
                                 "ok   example.com/kiwi-taskboard/internal/httpapi",
                                 "ok   example.com/kiwi-taskboard/internal/tasks")
-                session.press(b"\x1b", "Close command output")
+                session.press(b"\x14", "Hide test output")
                 session.connection.sendall(b"\x11")
                 terminal.wait(timeout=10)
                 if terminal.returncode != 0:

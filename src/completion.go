@@ -15,9 +15,11 @@ import (
 )
 
 type dependencyCompletion struct {
-	words       []string
-	members     map[string][]string
-	definitions map[string]definitionLocation
+	words        []string
+	members      map[string][]string
+	receivers    map[string]string
+	memberOwners map[string]string
+	definitions  map[string]definitionLocation
 }
 
 type completionResult struct {
@@ -32,7 +34,6 @@ func (e *editor) invalidateCompletion() {
 }
 
 func (e *editor) markCompletionDirty() {
-	e.completionPending = nil
 	e.completionGeneration++
 	e.completionDirty = true
 }
@@ -47,7 +48,8 @@ func (e *editor) completionSources() map[string][]byte {
 
 func (e *editor) loadMembersInBackground(path string) {
 	cached := e.completionCache[path]
-	if completionFamily(filepath.Ext(path)) == "" || e.completionPending[path] || cached.members != nil && cached.definitions != nil && !e.completionDirty {
+	typed := filepath.Ext(path) != ".cs" || cached.receivers != nil
+	if completionFamily(filepath.Ext(path)) == "" || e.completionPending[path] || cached.members != nil && cached.definitions != nil && typed && !e.completionDirty {
 		return
 	}
 	if e.completionPending == nil {
@@ -58,8 +60,9 @@ func (e *editor) loadMembersInBackground(path string) {
 	}
 	e.completionPending[path] = true
 	files, sources, generation := append([]string(nil), e.files...), e.completionSources(), e.completionGeneration
+	root, done := mustCwd(), e.completionDone
 	go func() {
-		e.completionDone <- completionResult{path, dependencyCompletions(path, files, sources), generation}
+		done <- completionResult{path, dependencyCompletionsAt(root, path, files, sources), generation}
 	}()
 }
 
@@ -163,7 +166,7 @@ func (e *editor) suggestion() []rune {
 		}
 		return b.suggestion()
 	}
-	if cached && !e.completionDirty {
+	if cached && !e.completionDirty && (filepath.Ext(b.path) != ".cs" || completion.receivers != nil) {
 		return dependencySuggestion(b, completion)
 	}
 	e.loadMembersInBackground(b.path)
@@ -181,6 +184,7 @@ func (e *editor) pollCompletion() bool {
 	for {
 		select {
 		case result := <-e.completionDone:
+			delete(e.completionPending, result.path)
 			if e.completionCache == nil {
 				e.completionCache = map[string]dependencyCompletion{}
 			}
@@ -189,10 +193,12 @@ func (e *editor) pollCompletion() bool {
 					e.completionCache[result.path] = result.completion
 					updated = true
 				}
+				if result.path == e.current().path {
+					e.loadMembersInBackground(result.path)
+				}
 				continue
 			}
 			e.completionCache[result.path] = result.completion
-			delete(e.completionPending, result.path)
 			e.completionDirty = false
 			if result.path == e.current().path {
 				receiver, _, memberAccess := memberAccessAtCursor(e.current())
@@ -213,11 +219,17 @@ func (e *editor) pollCompletion() bool {
 }
 
 func dependencyCompletions(current string, files []string, openSources ...map[string][]byte) dependencyCompletion {
+	return dependencyCompletionsAt(mustCwd(), current, files, openSources...)
+}
+
+func dependencyCompletionsAt(root, current string, files []string, openSources ...map[string][]byte) dependencyCompletion {
 	family := completionFamily(filepath.Ext(current))
 	words := map[string]bool{}
 	members := map[string]map[string]bool{}
 	definitions := map[string]definitionLocation{}
-	for _, dependency := range fileImports(current) {
+	returnTypes := map[string]string{}
+	var currentData []byte
+	for _, dependency := range fileImports(workspacePath(root, current)) {
 		addDependencyWords(words, dependency)
 	}
 
@@ -229,16 +241,25 @@ func dependencyCompletions(current string, files []string, openSources ...map[st
 			continue
 		}
 		visited[path] = true
-		data, err := os.ReadFile(path)
+		var data []byte
+		var err error
+		open := false
 		if len(openSources) > 0 {
-			if open, ok := openSources[0][path]; ok {
-				data, err = open, nil
-			}
+			data, open = openSources[0][path]
+		}
+		if !open {
+			data, err = os.ReadFile(workspacePath(root, path))
 		}
 		if err != nil || len(data) > 2<<20 {
 			continue
 		}
 		seen++
+		if path == current {
+			currentData = data
+		}
+		if filepath.Ext(path) == ".cs" {
+			indexCSharpReturns(returnTypes, data)
+		}
 		for name, row := range sourceDefinitionIndex(path, data) {
 			if _, exists := definitions[name]; !exists {
 				definitions[name] = definitionLocation{path, row}
@@ -260,15 +281,19 @@ func dependencyCompletions(current string, files []string, openSources ...map[st
 		if members[module] == nil {
 			members[module] = map[string]bool{}
 		}
-		for _, symbol := range fileSymbols(path) {
+		for _, symbol := range sourceSymbols(path, data) {
 			words[symbol.name] = true
 			members[module][symbol.name] = true
 		}
-		addObservedMembers(members, path, data)
+		addObservedMembers(members, path, data, path == current)
 		addDotnetFrameworkMembers(members, family, data)
 	}
 
-	result := dependencyCompletion{members: map[string][]string{}, definitions: definitions}
+	result := dependencyCompletion{members: map[string][]string{}, definitions: definitions, memberOwners: map[string]string{}}
+	if filepath.Ext(current) == ".cs" {
+		result.receivers = csharpReceiverTypes(current, currentData, returnTypes)
+		addCollectionMembers(members, result.receivers)
+	}
 	for word := range words {
 		if word != "" {
 			result.words = append(result.words, word)
@@ -280,6 +305,7 @@ func dependencyCompletions(current string, files []string, openSources ...map[st
 			result.members[owner] = append(result.members[owner], name)
 		}
 		sort.Strings(result.members[owner])
+		result.memberOwners[strings.ToLower(owner)] = owner
 	}
 	return result
 }
@@ -300,15 +326,24 @@ func addDotnetFrameworkMembers(members map[string]map[string]bool, family string
 	}
 }
 
-func addObservedMembers(members map[string]map[string]bool, path string, data []byte) {
+func addObservedMembers(members map[string]map[string]bool, path string, data []byte, includeReceivers bool) {
 	b := newBuffer(path, data)
+	receiverTypes := map[string]string{}
 	for _, match := range observedMemberPattern.FindAllSubmatch(data, -1) {
 		receiver, member := string(match[1]), string(match[2])
 		if member == "new" || member == "constructor" || member == "__init__" {
 			continue
 		}
-		owners := []string{strings.TrimPrefix(receiver, "$")}
-		if owner := objectType(b, receiver); owner != "" {
+		var owners []string
+		if includeReceivers {
+			owners = append(owners, strings.TrimPrefix(receiver, "$"))
+		}
+		owner, known := receiverTypes[receiver]
+		if !known {
+			owner = objectType(b, receiver)
+			receiverTypes[receiver] = owner
+		}
+		if owner != "" {
 			owners = append(owners, owner)
 		}
 		for _, owner := range owners {
@@ -413,20 +448,27 @@ func dependencyCandidates(b *buffer, completion dependencyCompletion) []string {
 	if !ok {
 		return nil
 	}
-	owner := objectType(b, receiver)
+	owner, indexed := completion.receivers[receiver]
+	if !indexed {
+		owner = objectType(b, receiver)
+	}
 	if owner == "" {
 		owner = strings.TrimPrefix(receiver, "$")
 	}
-	var candidates []string
-	for name, values := range completion.members {
-		if strings.EqualFold(name, owner) {
-			candidates = values
-			break
+	candidates := completion.members[owner]
+	if candidates == nil && completion.memberOwners != nil {
+		candidates = completion.members[completion.memberOwners[strings.ToLower(owner)]]
+	} else if candidates == nil {
+		for name, values := range completion.members {
+			if strings.EqualFold(name, owner) {
+				candidates = values
+				break
+			}
 		}
 	}
 	var matches []string
 	for _, member := range candidates {
-		if !strings.EqualFold(member, prefix) && strings.HasPrefix(strings.ToLower(member), strings.ToLower(prefix)) {
+		if len(member) > len(prefix) && strings.EqualFold(member[:len(prefix)], prefix) {
 			matches = append(matches, member)
 		}
 	}
@@ -446,7 +488,7 @@ func (e *editor) memberSuggestions() []string {
 
 func memberAccessAtCursor(b *buffer) (receiver, prefix string, ok bool) {
 	line := b.lines[b.row]
-	if b.col != len(line) {
+	if b.col < 0 || b.col > len(line) || b.col < len(line) && identifierRune(line[b.col]) {
 		return "", "", false
 	}
 	start := b.col
@@ -460,6 +502,21 @@ func memberAccessAtCursor(b *buffer) (receiver, prefix string, ok bool) {
 		}
 		end--
 	}
+	if end > 0 && line[end-1] == '?' {
+		end--
+	}
+	row := b.row
+	for {
+		for end > 0 && unicode.IsSpace(line[end-1]) {
+			end--
+		}
+		if end > 0 || row == 0 {
+			break
+		}
+		row--
+		line = b.lines[row]
+		end = len(line)
+	}
 	from := end
 	for from > 0 && identifierRune(line[from-1]) {
 		from--
@@ -467,7 +524,7 @@ func memberAccessAtCursor(b *buffer) (receiver, prefix string, ok bool) {
 	if from == end {
 		return "", "", false
 	}
-	return string(line[from:end]), string(line[start:b.col]), true
+	return string(line[from:end]), string(b.lines[b.row][start:b.col]), true
 }
 
 func identifierRune(value rune) bool {

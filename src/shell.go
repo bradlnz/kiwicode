@@ -9,8 +9,12 @@ import (
 )
 
 type shellPanel struct {
+	terminal      *interactiveTerminal
+	interactive   bool
 	open, focused bool
 	running       bool
+	testRun       bool
+	testTarget    string
 	stopping      bool
 	input         []rune
 	output        []string
@@ -66,6 +70,8 @@ func (s *shellPanel) handle(k key) {
 }
 
 func (s *shellPanel) start(command string) {
+	s.testRun = false
+	s.interactive = false
 	s.output = append(s.output, "$ "+command)
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -82,9 +88,10 @@ func (s *shellPanel) start(command string) {
 		return
 	}
 	s.cmd = cmd
+	done := s.done
 	go func() {
 		err := cmd.Wait()
-		s.done <- shellResult{output.Bytes(), err}
+		done <- shellResult{output.Bytes(), err}
 	}()
 }
 
@@ -109,23 +116,13 @@ func (s *shellPanel) poll() bool {
 	}
 	select {
 	case result := <-s.done:
-		s.running, s.stopping, s.cmd = false, false, nil
+		s.running, s.cmd = false, nil
 		s.appendResult(result.output, result.err)
+		s.stopping = false
 		return true
 	default:
 		return false
 	}
-}
-
-func (s *shellPanel) run(command string) {
-	s.output = append(s.output, "$ "+command)
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	// ponytail: commands are captured synchronously; add a PTY for interactive or long-running jobs.
-	out, err := exec.Command(shell, "-lc", command).CombinedOutput()
-	s.appendResult(out, err)
 }
 
 func (s *shellPanel) appendResult(out []byte, err error) {
@@ -135,6 +132,16 @@ func (s *shellPanel) appendResult(out []byte, err error) {
 	}
 	if err != nil {
 		s.output = append(s.output, "exit: "+err.Error())
+	}
+	if s.testRun {
+		result := "Tests passed"
+		if err != nil {
+			result = "Tests failed"
+		}
+		if s.stopping {
+			result = "Tests stopped"
+		}
+		s.output = append(s.output, result)
 	}
 	if len(s.output) > 500 {
 		s.output = s.output[len(s.output)-500:]

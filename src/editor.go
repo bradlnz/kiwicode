@@ -7,13 +7,25 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type editor struct {
-	workspace                 workspaceKind
-	agent                     *agentWorkspace
+	workspaces                map[string]cachedWorkspace
+	switching                 *workspaceSwitch
+	lastFrame                 string
+	checkpoint                *workspaceCheckpoint
+	projectSlots              []string
+	projectSlot               int
 	files                     []string
+	fileRefreshAt             time.Time
+	fileRefreshDone           chan fileTreeSnapshot
+	fileGeneration            int
 	tree                      []treeEntry
+	visibleTreeCache          []treeEntry
+	visibleTreeWidth          int
+	visibleTreeIndent         int
+	visibleTreeIcons          [2]string
 	collapsed                 map[string]bool
 	tests                     []testCase
 	selected, explorerTop     int
@@ -40,17 +52,14 @@ type editor struct {
 	quitArmed                 bool
 	closeArmed                *buffer
 	graph                     bool
-	graphLines                []string
-	graphTop                  int
+	dependencyCanvas          *nodeCanvas
+	architectureView          *nodeCanvas
 	shell                     shellPanel
 	help                      bool
 	wordWrap                  bool
 	opsMode                   string
 	opsLines                  []string
 	opsTop                    int
-	canvasWidth               int
-	debugging                 bool
-	debugOutputStart          int
 	popup                     *popupMenu
 	searchMode                string
 	searchInput               []rune
@@ -64,10 +73,6 @@ type editor struct {
 	newFilePrompt             bool
 	newFileInput              []rune
 	newFileDirectory          string
-	inspect                   bool
-	inspectionFindings        []inspectionFinding
-	inspectionSelected        int
-	inspectionTop             int
 	selection                 textSelection
 	clipboard                 string
 	completionCache           map[string]dependencyCompletion
@@ -89,11 +94,17 @@ type treeEntry struct {
 }
 
 func newEditor() *editor {
-	e := &editor{status: shortcutLabel("help") + " Shortcuts  " + shortcutLabel("explorer") + " Explorer"}
+	e := &editor{status: shortcutLabel("help") + " Shortcuts  " + shortcutLabel("explorer") + " Explorer", shell: shellPanel{open: true, interactive: true}}
+	var err error
+	e.projectSlots, e.projectSlot, err = loadProjectSlots(mustCwd())
+	if err != nil {
+		e.status = "Projects: " + err.Error()
+	}
 	e.refreshFiles()
 	if len(e.files) > 0 {
 		e.open(e.files[0])
-	} else {
+	}
+	if len(e.buffers) == 0 {
 		e.buffers = []*buffer{newBuffer(untitledName(), nil)}
 	}
 	return e
@@ -112,7 +123,18 @@ func untitledName() string {
 }
 
 func (e *editor) refreshFiles() {
-	e.files = projectFiles(".")
+	snapshot := readFileTree(mustCwd(), nil, nil)
+	if snapshot.err != nil {
+		e.status = "Files: " + snapshot.err.Error()
+		return
+	}
+	e.applyFileTree(snapshot)
+}
+
+func (e *editor) indexFiles(files []string, discovered ...[]testCase) {
+	e.fileGeneration++
+	e.visibleTreeCache = nil
+	e.files = append(e.files[:0], files...)
 	sort.Strings(e.files)
 	e.tree = e.tree[:0]
 	e.tests = e.tests[:0]
@@ -123,9 +145,12 @@ func (e *editor) refreshFiles() {
 		for parent := filepath.ToSlash(filepath.Dir(path)); parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
 			directories[parent] = true
 		}
-		if isTestFile(path) {
+		if len(discovered) == 0 && isTestFile(path) {
 			e.tests = append(e.tests, discoverTests(path)...)
 		}
+	}
+	if len(discovered) > 0 {
+		e.tests = append(e.tests, discovered[0]...)
 	}
 	for path := range directories {
 		e.tree = append(e.tree, treeEntry{path: path, dir: true})
@@ -142,7 +167,11 @@ func (e *editor) refreshFiles() {
 		e.tree = append(e.tree, treeEntry{path: path})
 	}
 	sort.Slice(e.tree, func(i, j int) bool { return e.tree[i].path < e.tree[j].path })
-	e.canvasWidth = -1
+	for _, canvas := range []*nodeCanvas{e.dependencyCanvas, e.architectureView} {
+		if canvas != nil {
+			canvas.stale = true
+		}
+	}
 	e.invalidateCompletion()
 	if e.sourceMode {
 		e.loadSourceControl()
@@ -152,9 +181,8 @@ func (e *editor) refreshFiles() {
 func (e *editor) open(path string) {
 	for i, b := range e.buffers {
 		if b.path == path {
-			e.active, e.explorer, e.opsMode = i, false, ""
-			e.workspace = workspaceFile
-			e.refreshInspector()
+			e.clearModalViews()
+			e.active, e.explorer = i, false
 			e.loadMembersInBackground(path)
 			if e.sourceMode {
 				e.loadSourceFileChanges(path)
@@ -181,9 +209,8 @@ func (e *editor) open(path string) {
 		return
 	}
 	e.buffers = append(e.buffers, newBuffer(path, data))
-	e.active, e.explorer, e.opsMode = len(e.buffers)-1, false, ""
-	e.workspace = workspaceFile
-	e.refreshInspector()
+	e.clearModalViews()
+	e.active, e.explorer = len(e.buffers)-1, false
 	e.loadMembersInBackground(path)
 	if e.sourceMode {
 		e.loadSourceFileChanges(path)
@@ -193,17 +220,30 @@ func (e *editor) open(path string) {
 func (e *editor) current() *buffer { return e.buffers[e.active] }
 
 func (e *editor) handle(k key) bool {
-	if e.workspace == workspaceAgent {
-		return e.handleAgent(k)
+	if e.switching != nil {
+		return k.r == e.switching.quitKey
 	}
-	if action := shortcutAction(k.r); action == "agent" || action == "agent-cancel" {
-		_, quit := e.handleCommand(action)
-		return quit
+	if k.alt && k.r >= '1' && k.r < '1'+rune(settings.projectQuickPicks) {
+		e.openProjectSlot(int(k.r - '1'))
+		return false
 	}
 	if k.mouse {
 		e.handleMouse(k)
 		return e.quitRequested
 	}
+	if e.terminalFocused() && !k.mouse && shortcutAction(k.r) != "terminal" {
+		if err := e.shell.terminal.handle(k); err != nil {
+			e.status = err.Error()
+		}
+		return false
+	}
+	if e.shell.open && e.shell.focused && !e.shell.interactive && e.popup == nil && shortcutAction(k.r) != "terminal" && shortcutAction(k.r) != "run-tests" {
+		e.shell.handle(k)
+		return false
+	}
+	if k.raw != "" {
+		return false
+	} // Unsupported editor keys still pass through in Terminal.
 	if e.popup != nil {
 		e.handlePopupKey(k)
 		return false
@@ -303,20 +343,20 @@ func (e *editor) closeModalView() bool {
 }
 
 func (e *editor) modalViewOpen() bool {
-	return e.shell.open || e.graph || e.help || e.opsMode != ""
+	return e.graph || e.help || e.opsMode != ""
 }
 
 func (e *editor) clearModalViews() {
-	e.shell.open, e.shell.focused = false, false
+	e.shell.focused = false
 	e.graph, e.help, e.opsMode = false, false, ""
 	e.sourceCommitFocused = false
 }
 
 func (e *editor) handleCommand(action string) (handled, quit bool) {
-	if handled, quit := e.agentCommand(action); handled {
-		return handled, quit
-	}
 	switch action {
+	case "run-tests":
+		e.runTests()
+		return true, false
 	case "undo":
 		if e.current().undoChange() {
 			e.invalidateCompletion()
@@ -348,7 +388,7 @@ func (e *editor) handleCommand(action string) (handled, quit bool) {
 	case "test-explorer":
 		e.clearModalViews()
 		e.showExplorer, e.explorer, e.testMode, e.sourceMode = true, true, true, false
-		e.status = "Tests: Space toggle · R run checked · Enter open"
+		e.status = "Tests: click or Enter to open"
 		return true, false
 	case "format":
 		e.formatCurrent()
@@ -365,9 +405,6 @@ func (e *editor) handleCommand(action string) (handled, quit bool) {
 		e.clearModalViews()
 		e.showExplorer, e.explorer, e.graph, e.help, e.sourceMode = true, true, false, false, false
 		return true, false
-	case "diagnostics":
-		e.checkProject()
-		return true, false
 	case "quit":
 		if !e.dirty() || e.quitArmed {
 			return true, true
@@ -380,11 +417,15 @@ func (e *editor) handleCommand(action string) (handled, quit bool) {
 		return true, false
 	case "terminal":
 		open := !e.shell.open
-		e.clearModalViews()
 		e.shell.open, e.shell.focused = open, open
+		if open {
+			e.openTerminal()
+		}
 		return true, false
 	case "close":
-		e.close()
+		if !e.closeModalView() {
+			e.close()
+		}
 		return true, false
 	case "paste":
 		if e.editorFocused() {
@@ -399,26 +440,11 @@ func (e *editor) handleCommand(action string) (handled, quit bool) {
 		e.current().scrollX, e.current().wrapSegment = 0, 0
 		e.status = map[bool]string{true: "Word Wrap: On", false: "Word Wrap: Off"}[e.wordWrap]
 		return true, false
-	case "inspect":
-		e.toggleInspector()
-		return true, false
 	case "go-to-definition":
 		e.goToDefinition()
 		return true, false
-	case "run":
-		e.runProject(false)
-		return true, false
-	case "test":
-		e.runProject(true)
-		return true, false
-	case "debug":
-		e.debugProject()
-		return true, false
 	case "architecture":
 		e.openArchitecture()
-		return true, false
-	case "slop":
-		e.checkSlop()
 		return true, false
 	case "source-control":
 		e.openSourceControl()
@@ -452,14 +478,19 @@ func (e *editor) toggleGraph() {
 	if !open {
 		return
 	}
-	e.loadGraph()
+	e.startNodeCanvas(false, false)
 	e.graph, e.explorer = true, false
 }
 
 func (e *editor) handleMouse(k key) {
-	if e.workspace == workspaceAgent {
-		e.handleAgentMouse(k)
+	if e.handleTerminalMouse(k) {
 		return
+	}
+	if c := e.activeNodeCanvas(); c != nil && e.popup == nil && !e.folderPrompt && !e.newFilePrompt && e.searchMode == "" {
+		if c.dragging || k.x >= c.x && k.x < c.x+c.width && k.y >= c.y && k.y < c.y+c.height {
+			e.handleCanvasMouse(c, k)
+			return
+		}
 	}
 	if e.newFilePrompt {
 		return
@@ -491,32 +522,20 @@ func (e *editor) handleMouse(k key) {
 		}
 		return
 	}
-	if e.popup == nil && e.modalViewOpen() && k.y != 1 && k.button != 64 && k.button != 65 {
-		e.shell.focused = e.shell.open
+	if e.popup == nil && e.modalViewOpen() && e.activeNodeCanvas() == nil && k.x > e.sidebarWidth() && k.y > 2 && k.button != 64 && k.button != 65 {
 		return
+	}
+	if k.button == 2 && k.y == 1 {
+		if index, ok := e.projectSlotAt(k.x); ok {
+			e.setProjectSlot(index)
+			return
+		}
 	}
 	if k.button == 2 {
 		e.openContextMenu(k)
 		return
 	}
-	if e.popup != nil {
-		if k.button == 0 {
-			if k.y == 1 {
-				e.popup = nil
-				if action := topActionAt(k.x); action != "" {
-					e.performAction(action)
-				} else {
-					e.openTopMenu(k.x)
-				}
-				return
-			}
-			if item, ok := e.popup.itemAt(k.x, k.y); ok {
-				e.popup = nil
-				e.performAction(item.action)
-			} else {
-				e.popup = nil
-			}
-		}
+	if e.handleTopBarMouse(k) {
 		return
 	}
 	if k.button == 64 || k.button == 65 {
@@ -527,23 +546,8 @@ func (e *editor) handleMouse(k key) {
 	if k.button != 0 {
 		return
 	}
-	if k.y == 1 {
-		if action := topActionAt(k.x); action != "" {
-			e.performAction(action)
-		} else {
-			e.openTopMenu(k.x)
-		}
-		return
-	}
 	side := e.sidebarWidth()
 	editorX := side
-	inspectWidth := e.inspectorWidth(e.cols - side)
-	if inspectWidth > 0 && k.x > e.cols-inspectWidth {
-		if k.y >= 3 && k.y < e.rows {
-			e.selectInspection(k.y - 3)
-		}
-		return
-	}
 	if k.y != 2 || k.x <= editorX || e.graph || e.help || e.opsMode != "" {
 		e.closeArmed = nil
 	}
@@ -558,7 +562,7 @@ func (e *editor) handleMouse(k key) {
 					e.loadSourceControl()
 				}
 			}
-		} else if !e.graph && !e.help && e.opsMode == "" {
+		} else {
 			e.selectWorkspaceTab(k.x - editorX - 1)
 		}
 		return
@@ -584,14 +588,11 @@ func (e *editor) handleMouse(k key) {
 			index := e.testTop + k.y - 3
 			if index >= 0 && index < len(e.tests) {
 				e.testSelected = index
-				switch testRowAction(k.x, e.tests[index]) {
-				case "run":
-					e.runProject(true, index)
-				case "toggle":
-					e.tests[index].checked = !e.tests[index].checked
-				default:
-					e.openTest(e.tests[index])
+				if k.x > side-testButtonWidth {
+					e.runTests(e.tests[index])
+					return
 				}
+				e.openTest(e.tests[index])
 			}
 		} else {
 			index := e.explorerTop + k.y - 3
@@ -627,7 +628,7 @@ func (e *editor) handleMouse(k key) {
 }
 
 func (e *editor) editorFocused() bool {
-	return e.workspace == workspaceFile && !e.explorer && !e.modalViewOpen()
+	return !e.explorer && !e.shell.focused && !e.modalViewOpen()
 }
 
 func (e *editor) handleWheel(k key) {
@@ -635,8 +636,9 @@ func (e *editor) handleWheel(k key) {
 	if k.button == 64 {
 		delta = -3
 	}
-	if e.shell.open && k.x > e.sidebarWidth() {
-		modalLines := max(1, min(24, e.rows-3)-3)
+	contentHeight, shellHeight := e.panelHeights()
+	if shellHeight > 0 && k.x > e.sidebarWidth() && k.y >= 3+contentHeight {
+		modalLines := max(1, shellHeight-2)
 		if delta < 0 {
 			e.shell.scroll = min(max(0, len(e.shell.output)-modalLines), e.shell.scroll+3)
 		} else {
@@ -644,13 +646,8 @@ func (e *editor) handleWheel(k key) {
 		}
 		return
 	}
-	if width := e.inspectorWidth(e.cols - e.sidebarWidth()); width > 0 && k.x > e.cols-width {
-		rows := e.inspectionRows(width)
-		e.inspectionTop = max(0, min(max(0, len(rows)-(e.rows-3)), e.inspectionTop+delta))
-		return
-	}
-	if e.graph {
-		e.graphTop = max(0, min(len(e.graphLines)-1, e.graphTop+delta))
+	if c := e.activeNodeCanvas(); c != nil && k.x > e.sidebarWidth() {
+		c.panY = max(0, c.panY+delta)
 		return
 	}
 	if e.opsMode != "" {
@@ -679,20 +676,22 @@ func (e *editor) selectTab(column int) {
 		return
 	}
 	e.active = i
-	e.workspace = workspaceFile
-	e.refreshInspector()
+	e.clearModalViews()
 	e.loadMembersInBackground(e.current().path)
 	if offset >= tabWidth(e.buffers[i])-(settings.tabPadding+1) {
 		e.close()
 		return
 	}
 	e.closeArmed = nil
-	e.explorer, e.help, e.opsMode = false, false, ""
-	e.shell.focused = false
+	e.explorer = false
 }
 
 func (e *editor) tabAt(column int) (int, int) {
-	start, end := e.visibleTabRange()
+	width := e.fileTabsWidth()
+	if column < 0 || column >= width {
+		return -1, 0
+	}
+	start, end := e.visibleTabRange(width)
 	for i := start; i < end; i++ {
 		b := e.buffers[i]
 		if width := tabWidth(b); column >= 0 && column < width {
@@ -705,32 +704,13 @@ func (e *editor) tabAt(column int) (int, int) {
 }
 
 func (e *editor) loadGraph() {
-	e.graphLines = dependencyGraph(e.files)
-	e.graphTop = 0
-	e.status = "Dependency graph  Ctrl+G close"
+	e.startNodeCanvas(false, true)
+	e.status = "Graph: click/Enter folder to expand · Enter file to open · arrows/drag pan · +/- zoom"
 }
 
 func (e *editor) handleGraph(k key) {
-	last := len(e.graphLines) - 1
-	switch k.code {
-	case keyUp:
-		if e.graphTop > 0 {
-			e.graphTop--
-		}
-	case keyDown:
-		if e.graphTop < last {
-			e.graphTop++
-		}
-	case keyPageUp:
-		e.graphTop -= 10
-		if e.graphTop < 0 {
-			e.graphTop = 0
-		}
-	case keyPageDown:
-		e.graphTop += 10
-		if e.graphTop > last {
-			e.graphTop = last
-		}
+	if c := e.activeNodeCanvas(); c != nil {
+		e.handleCanvasKey(c, k)
 	}
 }
 
@@ -767,12 +747,6 @@ func (e *editor) handleExplorer(k key) {
 			}
 		case keyTab:
 			e.explorer = false
-		default:
-			if k.r == ' ' && len(e.tests) > 0 {
-				e.tests[e.testSelected].checked = !e.tests[e.testSelected].checked
-			} else if k.r == 'r' || k.r == 'R' {
-				e.runProject(true)
-			}
 		}
 		return
 	}
@@ -816,7 +790,12 @@ func (e *editor) openTest(test testCase) {
 }
 
 func (e *editor) visibleTree() []treeEntry {
+	icons := [2]string{settings.icons["folder_open"], settings.icons["folder_closed"]}
+	if e.visibleTreeCache != nil && e.visibleTreeIndent == settings.explorerIndent && e.visibleTreeIcons == icons {
+		return e.visibleTreeCache
+	}
 	visible := make([]treeEntry, 0, len(e.tree))
+	e.visibleTreeWidth = 0
 	for _, entry := range e.tree {
 		hidden := false
 		for parent := filepath.ToSlash(filepath.Dir(entry.path)); parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
@@ -827,8 +806,10 @@ func (e *editor) visibleTree() []treeEntry {
 		}
 		if !hidden {
 			visible = append(visible, entry)
+			e.visibleTreeWidth = max(e.visibleTreeWidth, len([]rune(e.explorerTreeLabel(entry)))+3)
 		}
 	}
+	e.visibleTreeCache, e.visibleTreeIndent, e.visibleTreeIcons = visible, settings.explorerIndent, icons
 	return visible
 }
 
@@ -839,6 +820,7 @@ func (e *editor) setFolderCollapsed(path string, collapsed bool) {
 		e.collapsed = map[string]bool{}
 	}
 	e.collapsed[path] = collapsed
+	e.visibleTreeCache = nil
 	e.status = map[bool]string{true: "Collapsed ", false: "Expanded "}[collapsed] + path
 }
 
@@ -865,39 +847,51 @@ func isTestFile(path string) bool {
 }
 
 func (e *editor) openFolder(path string) {
-	if e.agentRunning() {
-		e.status = "Cancel the agent run before opening another folder"
+	if e.switching != nil {
 		return
 	}
 	if e.workspaceDone != nil {
 		e.status = "Workspace is still loading"
 		return
 	}
-	if e.dirty() {
-		e.status = "Save changes before opening another folder"
-		return
-	}
 	if e.shell.running {
 		e.status = "Stop the running command before opening a folder"
 		return
 	}
-	path = expandFolderPath(strings.TrimSpace(path))
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		e.status = "Folder not found: " + path
+	e.switchWorkspace(path)
+}
+
+func (e *editor) openProjectSlot(index int) {
+	if index < 0 || index >= settings.projectQuickPicks || index >= len(e.projectSlots) || e.projectSlots[index] == "" {
+		e.status = fmt.Sprintf("Project slot %d is empty", index+1)
 		return
 	}
-	_ = e.saveState()
-	e.closeAgent()
-	if err := os.Chdir(path); err != nil {
-		e.status = "Open folder failed: " + err.Error()
+	if index == e.projectSlot {
+		e.status = fmt.Sprintf("Project %d: %s", index+1, e.projectSlots[index])
 		return
 	}
-	configErr := loadSettings()
-	e.startWorkspaceLoad("Loading " + mustCwd() + "…")
-	if configErr != nil {
-		e.status = "Config: " + configErr.Error()
+	e.openFolder(e.projectSlots[index])
+}
+
+func (e *editor) setProjectSlot(index int) {
+	if index < 0 || index >= settings.projectQuickPicks {
+		return
 	}
+	current := filepath.Clean(mustCwd())
+	for len(e.projectSlots) <= index {
+		e.projectSlots = append(e.projectSlots, "")
+	}
+	for other, project := range e.projectSlots {
+		if other != index && project == current {
+			e.projectSlots[other] = ""
+		}
+	}
+	e.projectSlots[index], e.projectSlot = current, index
+	if err := saveProjectSlots(e.projectSlots); err != nil {
+		e.status = "Projects: " + err.Error()
+		return
+	}
+	e.status = fmt.Sprintf("Project %d set to %s", index+1, current)
 }
 
 func (e *editor) handleFolderPrompt(k key) {
@@ -1102,6 +1096,5 @@ func (e *editor) save() {
 	b.dirty = false
 	e.status = "Saved " + b.path
 	e.refreshFiles()
-	e.refreshInspector()
 	e.loadMembersInBackground(b.path)
 }

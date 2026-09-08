@@ -23,8 +23,10 @@ const (
 )
 
 type key struct {
+	raw            string
 	code           int
 	r              rune
+	alt            bool
 	mouse, release bool
 	button, x, y   int
 }

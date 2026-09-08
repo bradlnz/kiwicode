@@ -32,6 +32,8 @@ jobs:
           cache: false
       - name: Toolchain
         run: go version
+      - name: Native terminal engine
+        run: sudo apt-get update && sudo apt-get install -y libvterm-dev pkg-config sqlite3
       - name: Unit and integration tests
         run: go test -count=1 ./...
       - name: Race detector
@@ -41,8 +43,10 @@ jobs:
       - name: Build editor
         run: go build -o /tmp/kiwicode ./src
       - name: Interactive terminal smoke test
-        run: python3 tests/agent_terminal.py /tmp/kiwicode
+        run: python3 tests/editor_terminal.py /tmp/kiwicode
+      - name: Embedded shell and graph smoke test
+        run: python3 tests/embedded_terminal.py /tmp/kiwicode
       - name: Component performance baselines
         env:
           GOMAXPROCS: '2'
-        run: go test ./... -run '^$' -bench 'Benchmark(Agent|Input|Frame|Log|VisibleLog|Buffer|Analyze)' -benchmem -benchtime=200ms -count=3
+        run: go test ./... -run '^$' -bench 'Benchmark(Input|Frame|Buffer)' -benchmem -benchtime=200ms -count=3

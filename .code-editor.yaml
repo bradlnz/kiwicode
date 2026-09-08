@@ -1,7 +1,84 @@
+# Active theme: plum, forest, amber, mono. Also selectable from View.
 theme: plum
 
+# All theme palettes. Values are xterm-256 colour indices (0..255).
+themes:
+  plum:
+    top: 53
+    top_active: 95
+    menu: 238
+    menu_active: 242
+    text: 252
+    accent: 213
+    muted: 244
+    keyword: 213
+    string: 114
+    number: 81
+    function: 81
+    type: 220
+    operator: 177
+    parameter: 215
+    comment: 244
+    folder: 183
+  forest:
+    top: 22
+    top_active: 28
+    menu: 235
+    menu_active: 240
+    text: 252
+    accent: 150
+    muted: 244
+    keyword: 150
+    string: 186
+    number: 117
+    function: 81
+    type: 223
+    operator: 174
+    parameter: 216
+    comment: 244
+    folder: 108
+  amber:
+    top: 58
+    top_active: 94
+    menu: 236
+    menu_active: 240
+    text: 253
+    accent: 223
+    muted: 244
+    keyword: 214
+    string: 150
+    number: 117
+    function: 221
+    type: 180
+    operator: 203
+    parameter: 215
+    comment: 244
+    folder: 180
+  mono:
+    top: 237
+    top_active: 245
+    menu: 236
+    menu_active: 250
+    text: 255
+    accent: 252
+    muted: 244
+    keyword: 255
+    string: 250
+    number: 252
+    function: 255
+    type: 253
+    operator: 248
+    parameter: 255
+    comment: 244
+    folder: 250
+
+projects:
+  # Number of top-right slots (1..9). Click or Alt+number to switch; right-click to assign.
+  quick_picks: 5
+
 terminal:
-  maximized: true
+  # Screen rows, excluding the panel header; clamped to leave room for the editor.
+  height: 15
 
 explorer:
   max_width_percent: 50
@@ -19,10 +96,9 @@ icons:
   source: "⑂"
   folder_open: "▾"
   folder_closed: "▸"
-  test_checked: "☑"
-  test_unchecked: "☐"
 
-# Override any 256-color palette role with a value from 0 to 255.
+# Optional one-off overrides for the active theme. Edit themes above to retain
+# overrides when switching themes from View. All supported roles are shown above.
 # colors:
 #   parameter: 215
 #   folder: 183
@@ -31,13 +107,14 @@ icons:
 
 # Ctrl+I, Ctrl+J, and Ctrl+M are reserved by terminals for Tab/Enter.
 shortcuts:
+  run_tests: ctrl+r
   test_explorer: ctrl+e
+  go_to_definition: ctrl+d
   search: ctrl+f
   function_search: ctrl+u
   terminal: ctrl+t
   format: ctrl+k
   # source_control: ctrl+u
-  diagnostics: ctrl+r
   graph: ctrl+g
   files_explorer: ctrl+p
   explorer: ctrl+b
@@ -49,3 +126,10 @@ shortcuts:
   paste: ctrl+v
   help: ctrl+o
   quit: ctrl+q
+
+# Project slots: click or Alt+number to open; right-click a number to assign.
+# Override automatic test command detection when needed:
+# tests:
+#   command: go test ./...
+# Terminal: $SHELL -i loads ~/.bashrc (Bash), ~/.zshrc (zsh), etc.
+# Ctrl+T returns to the editor; other Ctrl keys go to the terminal while focused.

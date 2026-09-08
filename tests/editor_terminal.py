@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real PTY smoke test; no provider credentials or external model calls."""
+"""Real PTY smoke test for editor input, paste, tabs and guarded quit."""
 import fcntl
 import os
 from pathlib import Path
@@ -20,12 +20,9 @@ def main() -> None:
         root = Path(directory)
         source = root / "sample.txt"
         source.write_text("sample text\n", encoding="utf-8")
-        original_mtime = source.stat().st_mtime_ns
         env = dict(os.environ)
         env.update(HOME=directory, XDG_STATE_HOME=str(root / "state"),
-                   KIWICODE_AGENT_HISTORY="0", KIWICODE_AGENT_ALLOW_COMMANDS="0",
-                   KIWICODE_AGENT_ENDPOINT="", KIWICODE_AGENT_MODEL="",
-                   KIWICODE_AGENT_API_KEY="", TERM="xterm-256color")
+                   SHELL="/bin/bash", PATH="/usr/bin:/bin", TERM="xterm-256color")
         master, slave = pty.openpty()
         original = termios.tcgetattr(slave)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -66,26 +63,18 @@ def main() -> None:
             os.write(master, data)
 
         try:
-            expect("sample.txt")
-            send(b"\x01")
-            expect("KiwiCode \u00b7 AGENT")
-            send(b"draft persists")
-            expect("draft persists")
-            send(b"\x13")  # Save must not reach the file while Agent is active.
-            expect("File commands are unavailable")
-            assert source.stat().st_mtime_ns == original_mtime
-            send(b"\x01")
-            expect("sample.txt")
+            frame = expect("sample.txt")
+            assert b"Agent" not in frame, "removed Agent tab remains"
+            send(b"\x01\x18")  # Retired Agent shortcuts must leave the editor alone.
+            # First tab begins at the editor edge, with no reserved Agent width.
+            send(b"\x1b[<0;3;2M\x1b[<0;3;2m")
             send(b"X")
             expect("sample.txt *")
-            send(b"\x01")
-            expect("draft persists")
-            send(b"\x1b[200~/approve\nthis stays draft\x1b[201~")
-            pasted = expect("this stays draft")
-            assert b"Agent unavailable" not in pasted, "paste submitted a task"
-            assert b"Approval decision sent" not in pasted, "paste approved an action"
-            send(b"\r")
-            expect("Agent unavailable")
+            send(b"\x1b[200~pasted\ntext\x1b[201~")
+            expect("textsample text")
+            send(b"\x1a")  # A bracketed paste is a single undo operation.
+            expect("Undid last change")
+            assert source.read_text(encoding="utf-8") == "sample text\n"
             drain()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 26, 90, 0, 0))
             os.kill(process.pid, signal.SIGWINCH)
@@ -99,7 +88,7 @@ def main() -> None:
             assert source.read_text(encoding="utf-8") == "sample text\n"
             assert termios.tcgetattr(slave) == original, "terminal mode was not restored"
             assert b"\x1b[?2004l" in transcript, "bracketed paste was not disabled on exit"
-            print("PASS: Agent/file tabs, draft retention, input isolation, bracketed paste, idle resize, guarded quit, terminal restoration")
+            print("PASS: editor-only tabs, retired shortcuts, bracketed paste/undo, idle resize, guarded quit, terminal restoration")
         finally:
             if process.poll() is None:
                 process.kill()

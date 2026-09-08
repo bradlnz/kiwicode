@@ -11,10 +11,17 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	state, err := os.MkdirTemp("", "kiwicode-test-state-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("XDG_STATE_HOME", state)
 	if filepath.Base(mustCwd()) == "src" {
 		_ = os.Chdir("..")
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(state)
+	os.Exit(code)
 }
 
 func TestEditing(t *testing.T) {
@@ -62,29 +69,6 @@ func TestEditing(t *testing.T) {
 	view := &editor{buffers: []*buffer{wide}}
 	if handled, _ := view.handleCommand("word-wrap"); !handled || !view.wordWrap {
 		t.Fatal("View → Word Wrap did not enable wrapping")
-	}
-}
-
-func TestNestedProjectCommand(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "app"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "app", "go.mod"), []byte("module app\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	old, _ := os.Getwd()
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(old)
-
-	if got := projectCommand("app/main_test.go", true); got != "cd 'app' && go test ./..." {
-		t.Fatalf("nested test project was not detected: %q", got)
-	}
-	e := &editor{tests: []testCase{{name: "TestOne"}, {name: "TestTwo"}}}
-	if got, _ := e.checkedTestCommand(projectCommand("app/main_test.go", true), 1); got != "cd 'app' && go test ./... -run '^(TestTwo)$'" {
-		t.Fatalf("nested single-test command was not filtered: %q", got)
 	}
 }
 
@@ -159,6 +143,7 @@ func TestOpenFolderPredictions(t *testing.T) {
 }
 
 func TestMouseInput(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
 	k := parseMouse("0;5;3", false)
 	if !k.mouse || k.button != 0 || k.x != 5 || k.y != 3 {
 		t.Fatalf("unexpected mouse event: %#v", k)
@@ -170,6 +155,7 @@ func TestMouseInput(t *testing.T) {
 		t.Fatalf("unexpected cursor: %d:%d", e.current().row, e.current().col)
 	}
 	e.handle(key{r: 20})
+	t.Cleanup(func() { e.shell.terminal.close() })
 	if !e.shell.open || !e.shell.focused {
 		t.Fatal("terminal activity button did not open the terminal")
 	}
@@ -177,7 +163,7 @@ func TestMouseInput(t *testing.T) {
 
 func TestTabClose(t *testing.T) {
 	first := newBuffer("first.go", nil)
-	e := &editor{buffers: []*buffer{first, newBuffer("second.go", nil)}}
+	e := &editor{buffers: []*buffer{first, newBuffer("second.go", nil)}, cols: 100, rows: 30}
 	e.selectTab(tabWidth(first) - 3)
 	if len(e.buffers) != 1 || e.current().path != "second.go" {
 		t.Fatalf("tab did not close: %#v", runeLines(e.current().lines))
@@ -186,7 +172,8 @@ func TestTabClose(t *testing.T) {
 		e.buffers = append(e.buffers, newBuffer(fmt.Sprintf("tab%d.go", i), nil))
 	}
 	e.active = len(e.buffers) - 1
-	if start, end := e.visibleTabRange(); start != 1 || end != 7 {
+	e.cols = 6 * tabWidth(e.buffers[1])
+	if start, end := e.visibleTabRange(e.fileTabsWidth()); start != 1 || end != 7 {
 		t.Fatalf("visible tab range = %d:%d", start, end)
 	}
 	if i, _ := e.tabAt(0); i != 1 {
@@ -196,14 +183,20 @@ func TestTabClose(t *testing.T) {
 
 func TestShellAndSyntax(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("HOME", t.TempDir()) // Do not run the user's login profile in this unit test.
 	var shell shellPanel
-	shell.run("printf hello")
+	defer func() { shell.stop(); shell.stop() }()
+	shell.start("printf hello")
+	deadline := time.Now().Add(5 * time.Second)
+	for shell.running && time.Now().Before(deadline) {
+		shell.poll()
+		time.Sleep(time.Millisecond)
+	}
 	if len(shell.output) != 2 || shell.output[1] != "hello" {
 		t.Fatalf("unexpected shell output: %#v", shell.output)
 	}
 	shell.start("sleep 30")
-	defer shell.stop()
-	deadline := time.Now().Add(time.Second)
+	deadline = time.Now().Add(time.Second)
 	for shell.cmd.Process == nil && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
@@ -277,6 +270,12 @@ func TestMenusSearchAndProjects(t *testing.T) {
 	if e.searchMode != "files" {
 		t.Fatal("Enter did not activate Open File from the File menu")
 	}
+	e.current().dirty = true
+	e.performAction("open-folder")
+	if !e.folderPrompt {
+		t.Fatal("dirty workspace could not open the folder picker")
+	}
+	e.folderPrompt, e.current().dirty = false, false
 	e.searchMode = ""
 	e.handle(key{mouse: true, button: 2, x: 50, y: 8})
 	if e.popup == nil || len(e.popup.items) == 0 {
@@ -297,6 +296,48 @@ func TestMenusSearchAndProjects(t *testing.T) {
 	if !strings.Contains(e.topBar(), "48;5;53") {
 		t.Fatal("top menu does not use the distinct plum palette")
 	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := t.TempDir()
+	for index := 1; index <= 5; index++ {
+		project := filepath.Join(root, fmt.Sprint(index))
+		if err := os.Mkdir(project, 0755); err != nil {
+			t.Fatal(err)
+		}
+		slots, active, err := loadProjectSlots(project)
+		if err != nil || active != min(index-1, settings.projectQuickPicks-1) || len(slots) != min(index, settings.projectQuickPicks) {
+			t.Fatalf("project slots failed: %#v active=%d err=%v", slots, active, err)
+		}
+	}
+	project := filepath.Join(root, "6")
+	if err := os.Mkdir(project, 0755); err != nil {
+		t.Fatal(err)
+	}
+	slots, active, err := loadProjectSlots(filepath.Join(root, "6"))
+	if err != nil || active != -1 || len(slots) != settings.projectQuickPicks {
+		t.Fatalf("full project slots were not stable: %#v active=%d err=%v", slots, active, err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "3")); err != nil {
+		t.Fatal(err)
+	}
+	slots, active, err = loadProjectSlots(filepath.Join(root, "6"))
+	if err != nil || active != 2 || slots[2] != filepath.Join(root, "6") {
+		t.Fatalf("dead project slot was not repaired: %#v active=%d err=%v", slots, active, err)
+	}
+	assigned := &editor{cols: 100}
+	assigned.handle(key{mouse: true, button: 2, x: 99, y: 1})
+	if assigned.projectSlot != 4 || assigned.projectSlots[4] != mustCwd() {
+		t.Fatalf("right-click did not assign project slot 5: %#v", assigned.projectSlots)
+	}
+	for index := 0; index < settings.projectQuickPicks; index++ {
+		x := 100 - projectSlotBarWidth() + index*3 + 2
+		if got, ok := assigned.projectSlotAt(x); !ok || got != index {
+			t.Fatalf("project slot %d was not clickable at column %d", index+1, x)
+		}
+		assigned.projectSlots[index], assigned.projectSlot, assigned.status = mustCwd(), index, ""
+		if !assigned.handleTopBarMouse(key{mouse: true, button: 0, x: x, y: 1}) || !strings.HasPrefix(assigned.status, fmt.Sprintf("Project %d:", index+1)) {
+			t.Fatalf("project slot %d click was not handled", index+1)
+		}
+	}
 	completion := newBuffer("main.go", []byte("fu"))
 	completion.col = 2
 	if got := string(completion.suggestion()); got != "nc" {
@@ -308,28 +349,6 @@ func TestMenusSearchAndProjects(t *testing.T) {
 	request := mcpRequest{Method: "tools/list", ID: json.RawMessage("1")}
 	if result, err := handleMCP(request, "."); err != nil || result == nil {
 		t.Fatalf("MCP tool listing failed: %#v %v", result, err)
-	}
-	if got := projectCommand("main.go", true); got != "go test ./..." {
-		t.Fatalf("unexpected test command: %q", got)
-	}
-	containerRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(containerRoot, "Containerfile"), []byte("FROM scratch\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	buildContainer := containerCommand(filepath.Join(containerRoot, "cmd", "main.go"), true)
-	runContainer := containerCommand(filepath.Join(containerRoot, "cmd", "main.go"), false)
-	if !strings.Contains(buildContainer, "nerdctl --namespace kiwicode build") ||
-		!strings.Contains(runContainer, "nerdctl --namespace kiwicode run --rm --read-only") ||
-		!strings.Contains(runContainer, "--network none --cap-drop ALL --security-opt no-new-privileges") {
-		t.Fatalf("container commands are not sandboxed: %q %q", buildContainer, runContainer)
-	}
-	dockerRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dockerRoot, "Dockerfile"), []byte("FROM scratch\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	containerDebug := debugCommand(filepath.Join(dockerRoot, "main.go"))
-	if !strings.Contains(containerDebug, "build -f '"+filepath.Join(dockerRoot, "Dockerfile")+"'") || !strings.Contains(containerDebug, " && nerdctl --namespace kiwicode run") {
-		t.Fatalf("Dockerfile debug did not build and run through containerd: %q", containerDebug)
 	}
 	if !strings.Contains(highlightLine("main.tf", []rune(`resource "x" "y" {`)), "\x1b[38;5;213mresource") ||
 		!strings.Contains(highlightLine("app.yaml", []rune("enabled: true")), "\x1b[38;5;81menabled") ||
@@ -387,13 +406,6 @@ func TestMenusSearchAndProjects(t *testing.T) {
 	if !strings.Contains(erb, ansiFG(colors.operator)+"<%=") || !strings.Contains(erb, ansiFG(colors.function)+"link_to") || !strings.Contains(erb, ansiFG(colors.parameter)+"@user") {
 		t.Fatalf("ERB syntax highlighting failed: %q", erb)
 	}
-	slopPath := filepath.Join(t.TempDir(), "generated.go")
-	if err := os.WriteFile(slopPath, []byte("package p\n// This function is responsible for everything\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if findings := slopFindings([]string{slopPath}); len(findings) != 1 {
-		t.Fatalf("slop signal was not detected: %#v", findings)
-	}
 	csPath := filepath.Join(t.TempDir(), "Program.cs")
 	if err := os.WriteFile(csPath, []byte("using System.Text;\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -414,9 +426,6 @@ func TestMenusSearchAndProjects(t *testing.T) {
 		if graph := strings.Join(dependencyGraph([]string{interfacePath}), "\n"); !strings.Contains(graph, model.want) {
 			t.Fatalf("interface members were not added to the dependency graph: %q", graph)
 		}
-	}
-	if command := debugCommand("main.go"); command != "GOTRACEBACK=all go run ." {
-		t.Fatalf("unexpected debug command: %q", command)
 	}
 	symbolPath := filepath.Join(t.TempDir(), "symbols.go")
 	if err := os.WriteFile(symbolPath, []byte("package p\nfunc SearchMe() {}\n"), 0644); err != nil {
@@ -439,13 +448,9 @@ func TestMenusSearchAndProjects(t *testing.T) {
 	if !paste.undoChange() || string(paste.lines[0]) != "ab" {
 		t.Fatalf("multiline paste was not undoable: %#v", runeLines(paste.lines))
 	}
-	canvas := strings.Join(architectureCanvas(e.tree, e.files, 90), "\n")
-	if !strings.Contains(canvas, "FOLDERS") || !strings.Contains(canvas, "DIRECT DEPENDENCIES") {
-		t.Fatalf("architecture canvas failed: %q", canvas)
-	}
-	maximized := &editor{rows: 30, cols: 100, showExplorer: true, shell: shellPanel{open: true}}
-	if content, terminal := maximized.panelHeights(); content != 27 || terminal != 0 {
-		t.Fatalf("terminal modal hid the file: content=%d terminal=%d", content, terminal)
+	docked := &editor{rows: 30, cols: 100, showExplorer: true, shell: shellPanel{open: true}}
+	if content, terminal := docked.panelHeights(); content != 27-terminal || terminal != settings.terminalHeight+1 {
+		t.Fatalf("terminal did not dock below the file: content=%d terminal=%d", content, terminal)
 	}
 }
 
@@ -500,7 +505,7 @@ func TestThemeKeymapAndParameters(t *testing.T) {
 }
 
 func TestCollapsibleFoldersAndTestCases(t *testing.T) {
-	if bar := (&editor{explorer: true}).sidebarActivityBar(); !strings.HasPrefix(bar, "  \x1b[1;4m") {
+	if bar := (&editor{explorer: true}).sidebarActivityBar(); !strings.HasPrefix(bar, "  \x1b[1m") {
 		t.Fatalf("file activity underline included its padding: %q", bar)
 	}
 	if view, ok := sidebarModeAt(2); !ok || view != "files" {
@@ -536,25 +541,24 @@ func TestCollapsibleFoldersAndTestCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := discoverTests(path)
-	if len(tests) != 1 || tests[0].name != "TestCreate" || tests[0].row != 2 || !strings.Contains(testLabel(tests[0]), "☑ TestCreate") {
+	if len(tests) != 1 || tests[0].name != "TestCreate" || tests[0].row != 2 || testRowLabel(tests[0]) != "TestCreate" {
 		t.Fatalf("test functions were not discovered: %#v", tests)
 	}
 	e.tests, e.testMode, e.explorer = tests, true, true
-	e.handleExplorer(key{r: ' '})
-	if e.tests[0].checked || !strings.Contains(testLabel(e.tests[0]), "☐ TestCreate") {
-		t.Fatalf("test checkbox did not toggle: %#v", e.tests[0])
+	e.handleExplorer(key{code: keyEnter})
+	if e.current().path != path || e.current().row != 1 || e.shell.running {
+		t.Fatal("test explorer did not navigate to the test definition")
 	}
-	e.tests = []testCase{{name: "TestCreate", checked: true}, {name: "TestDelete", checked: false}}
-	if testRowAction(3, e.tests[0]) != "run" || testRowAction(9, e.tests[0]) != "toggle" || testRowAction(10, e.tests[0]) != "open" {
-		t.Fatalf("test row buttons do not match their labels: %q", testRowLabel(e.tests[0]))
+	e.rows, e.cols, e.showExplorer = 30, 100, true
+	e.openContextMenu(key{x: 3, y: 3})
+	if e.popup == nil || len(e.popup.items) != 3 || e.popup.items[0].action != "open-test" || e.popup.items[1].action != "run-selected-test" || e.popup.items[2].action != "run-tests" {
+		t.Fatal("test context menu must offer navigation and running tests")
 	}
-	command, err := e.checkedTestCommand("go test ./...")
-	if err != nil || !strings.Contains(command, "-run") || !strings.Contains(command, "TestCreate") || strings.Contains(command, "TestDelete") {
-		t.Fatalf("checked tests did not filter the runner: %q %v", command, err)
-	}
-	command, err = e.checkedTestCommand("go test ./...", 1)
-	if err != nil || !strings.Contains(command, "TestDelete") || strings.Contains(command, "TestCreate") {
-		t.Fatalf("single-test button did not filter the runner: %q %v", command, err)
+	e.popup = nil
+	e.current().row = 0
+	e.handle(key{mouse: true, button: 0, x: 3, y: 3})
+	if e.current().row != 1 || e.shell.running {
+		t.Fatal("clicking a test should open its definition, not run it")
 	}
 }
 
@@ -851,36 +855,5 @@ func TestGoToDefinitionUsesBackgroundIndexAcrossFiles(t *testing.T) {
 	reused.goToDefinition()
 	if reused.definitionLoading || reused.current().path != modelPath || reused.current().row != 1 {
 		t.Fatalf("shared definition index was not reused: loading=%v path=%q row=%d", reused.definitionLoading, reused.current().path, reused.current().row)
-	}
-}
-
-func TestFileInspectorFindsDRYAndJumpsToSource(t *testing.T) {
-	root := t.TempDir()
-	block := "const first = loadCustomer()\nvalidateCustomer(first)\nsaveCustomer(first)\nnotifyCustomer(first)\n"
-	first := filepath.Join(root, "first.js")
-	source := block + "\n\n\n\n\n" + block
-	if err := os.WriteFile(first, []byte(source), 0644); err != nil {
-		t.Fatal(err)
-	}
-	findings := inspectProject([]string{first})
-	if len(findings) == 0 || findings[0].principle != "DRY" || findings[0].path != first {
-		t.Fatalf("expected a DRY finding in the repeated file: %#v", findings)
-	}
-	b := newBuffer(first, []byte(source))
-	e := &editor{buffers: []*buffer{b}, files: []string{first}, rows: 30, cols: 120, inspect: true, inspectionFindings: findings}
-	e.selectInspection(0)
-	if e.current().row != findings[0].row-1 || e.selection.empty() {
-		t.Fatalf("inspector did not highlight its source: row=%d selection=%#v", e.current().row, e.selection)
-	}
-	other := filepath.Join(root, "other.js")
-	if err := os.WriteFile(other, []byte("throw new UnsupportedOperationException()\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	e.files = append(e.files, other)
-	e.refreshInspector()
-	for _, finding := range e.inspectionFindings {
-		if finding.path != first {
-			t.Fatalf("inspector included a non-active file: %#v", finding)
-		}
 	}
 }

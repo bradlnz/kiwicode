@@ -44,12 +44,7 @@ func run() error {
 	defer fmt.Print(bracketedPasteOff + mouseOff + "\x1b[?25h\x1b[?1049l")
 
 	e := loadEditorAsync()
-	defer func() {
-		e.closeAgent()
-		if e.workspaceDone == nil {
-			_ = e.saveState()
-		}
-	}()
+	defer e.closeWorkspaces()
 	if configErr != nil {
 		e.status = "Config: " + configErr.Error()
 	}
@@ -86,13 +81,13 @@ func run() error {
 		case <-resized:
 			e.resize() // only startup and actual resize notifications
 			changed = true
-		case view := <-e.contextEvents():
-			changed = e.receiveContext(view)
-		case event, ok := <-e.agentEvents():
-			changed = e.receiveAgent(event, ok)
-		case now := <-maintenance.C:
+		case loaded := <-e.workspaceSwitchEvents():
+			e.finishWorkspaceSwitch(loaded)
+			changed = true
+		case event, ok := <-e.terminalEvents():
+			changed = e.receiveTerminal(event, ok)
+		case <-maintenance.C:
 			changed = e.pollEditor(configErr)
-			changed = e.checkpointAgent(now, false) || changed
 		case <-frames.channel():
 			frames.fired()
 			e.draw()
@@ -137,7 +132,17 @@ func (f *frameSchedule) stop() {
 }
 
 func (e *editor) pollEditor(configErr error) bool {
+	if e.switching != nil {
+		return e.pollWorkspaceSwitch()
+	}
+	checkpointChanged := e.pollWorkspaceCheckpoints()
+	canvasChanged := e.pollNodeCanvases()
 	workspaceDone, workspaceErr := e.pollWorkspace()
+	// Start the default dock only after loading, with the real viewport size.
+	terminalStarted := e.workspaceDone == nil && e.shell.open && e.shell.interactive && e.shell.terminal == nil
+	if terminalStarted {
+		e.openTerminal()
+	}
 	if workspaceDone && workspaceErr != nil {
 		e.status = "State: " + workspaceErr.Error()
 	} else if workspaceDone && configErr != nil {
@@ -146,16 +151,14 @@ func (e *editor) pollEditor(configErr error) bool {
 	completionDone := e.pollCompletion()
 	definitionDone := e.pollDefinition()
 	sourceDone := e.pollSourceControl()
+	filesChanged := e.pollFileTree()
 	shellDone := e.shell.poll()
 	if shellDone && e.sourceRefresh {
 		e.sourceRefresh = false
 		e.refreshFiles()
 		e.reloadCleanBuffers()
 	}
-	if shellDone && e.debugging {
-		e.finishDebug()
-	}
-	return workspaceDone || shellDone || completionDone || definitionDone || sourceDone
+	return filesChanged || terminalStarted || canvasChanged || checkpointChanged || workspaceDone || shellDone || completionDone || definitionDone || sourceDone
 }
 
 type editorLoad struct {
@@ -170,12 +173,12 @@ func loadEditorAsync() *editor {
 }
 func (e *editor) startWorkspaceLoad(status string) {
 	rows, cols := e.rows, e.cols
+	projectSlots, projectSlot := e.projectSlots, e.projectSlot
 	done := make(chan editorLoad, 1)
-	*e = editor{buffers: []*buffer{newBuffer(untitledName(), nil)}, collapsed: map[string]bool{}, status: status, rows: rows, cols: cols, workspaceDone: done}
+	*e = editor{buffers: []*buffer{newBuffer(untitledName(), nil)}, collapsed: map[string]bool{}, status: status, rows: rows, cols: cols, workspaceDone: done, workspaces: e.workspaces, projectSlots: projectSlots, projectSlot: projectSlot}
 	go func() {
 		loaded := newEditor()
 		err := loaded.restoreState()
-		loaded.restoreAgent()
 		done <- editorLoad{loaded, err}
 	}()
 }
@@ -186,7 +189,7 @@ func (e *editor) pollWorkspace() (bool, error) {
 	select {
 	case loaded := <-e.workspaceDone:
 		rows, cols := e.rows, e.cols
-		workspace, earlyAgent := e.workspace, e.agent
+		cache := e.workspaces
 		var edited []*buffer
 		for _, b := range e.buffers {
 			if b.dirty {
@@ -194,14 +197,8 @@ func (e *editor) pollWorkspace() (bool, error) {
 			}
 		}
 		*e = *loaded.editor
-		e.rows, e.cols, e.workspace = rows, cols, workspace
-		// A draft typed while indexing must not be replaced by restored history.
-		if earlyAgent != nil && (earlyAgent.dirty || earlyAgent.forget || e.agent == nil) {
-			e.agent = earlyAgent
-		}
-		if e.agent != nil {
-			e.ensureAgent()
-		}
+		e.workspaces = cache
+		e.rows, e.cols = rows, cols
 		if e.restoredTheme != "" && !strings.EqualFold(e.restoredTheme, colors.name) {
 			setColorScheme(strings.ToLower(e.restoredTheme))
 		}

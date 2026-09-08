@@ -123,8 +123,18 @@ func decodeInputKey(data []byte) (key, int, bool) {
 	if len(data) == 1 {
 		return key{}, 0, false
 	}
+	if data[1] == 'O' {
+		if len(data) < 3 {
+			return key{}, 0, false
+		}
+		return key{raw: string(data[:3])}, 3, true
+	}
 	if data[1] != '[' {
-		return key{}, 1, true
+		if !utf8.FullRune(data[1:]) {
+			return key{}, 0, false
+		}
+		r, n := utf8.DecodeRune(data[1:])
+		return key{r: r, alt: true}, n + 1, true
 	}
 	if len(data) == 2 {
 		return key{}, 0, false
@@ -163,7 +173,7 @@ func decodeInputKey(data []byte) (key, int, bool) {
 	if data[2] == '<' && (last == 'M' || last == 'm') {
 		return parseMouse(string(data[3:len(data)-1]), last == 'm'), len(data), true
 	}
-	return key{}, len(data), true
+	return key{raw: string(data)}, len(data), true
 }
 
 // Only this goroutine reads stdin. Read batching avoids a syscall for every

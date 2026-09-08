@@ -66,9 +66,10 @@ func (e *editor) goToDefinition() {
 	e.definitionLoading = true
 	e.status = "Go to Definition: loading…"
 	files, sources := append([]string(nil), e.files...), e.completionSources()
+	root, done := mustCwd(), e.definitionDone
 	go func() {
-		path, row, found := findDefinition(current, word, files, sources)
-		e.definitionDone <- definitionResult{word, path, row, found}
+		path, row, found := findDefinition(current, word, files, sources, root)
+		done <- definitionResult{word, path, row, found}
 	}()
 }
 
@@ -120,7 +121,11 @@ func wordAtCursor(b *buffer) string {
 	return strings.TrimPrefix(string(line[start:end]), "$")
 }
 
-func findDefinition(current, word string, files []string, sources map[string][]byte) (string, int, bool) {
+func findDefinition(current, word string, files []string, sources map[string][]byte, roots ...string) (string, int, bool) {
+	root := mustCwd()
+	if len(roots) > 0 {
+		root = roots[0]
+	}
 	family, needle := completionFamily(filepath.Ext(current)), []byte(word)
 	seen := map[string]bool{}
 	for _, path := range files {
@@ -131,7 +136,7 @@ func findDefinition(current, word string, files []string, sources map[string][]b
 		data, ok := sources[path]
 		if !ok {
 			var err error
-			data, err = os.ReadFile(path)
+			data, err = os.ReadFile(workspacePath(root, path))
 			if err != nil {
 				continue
 			}

@@ -1,6 +1,10 @@
 package main
 
 func (e *editor) handleOperations(k key) {
+	if c := e.activeNodeCanvas(); c != nil {
+		e.handleCanvasKey(c, k)
+		return
+	}
 	last := max(0, len(e.opsLines)-1)
 	switch k.code {
 	case keyUp:

@@ -231,3 +231,31 @@ func clipboardCommand(write bool) (string, []string) {
 	}
 	return "xclip", []string{"-selection", "clipboard", "-o"}
 }
+
+func (e *editor) handlePaste(text string) {
+	if e.switching != nil {
+		return
+	}
+	if e.terminalFocused() {
+		if err := e.shell.terminal.paste(text); err != nil {
+			e.status = err.Error()
+		}
+		return
+	}
+	if !e.editorFocused() || e.popup != nil || e.searchMode != "" || e.folderPrompt || e.newFilePrompt || e.sourceCommitFocused {
+		e.status = "Paste into an editor buffer or the terminal"
+		return
+	}
+	if len(text) > 2<<20 {
+		e.status = "Paste is larger than 2 MiB"
+		return
+	}
+	b := e.current()
+	b.recordUndo()
+	b.suppressUndo = true
+	e.deleteSelection()
+	b.insertText(text)
+	b.suppressUndo = false
+	e.selection = textSelection{}
+	e.invalidateCompletion()
+}

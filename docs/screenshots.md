@@ -10,7 +10,7 @@ rendered UI text, patch editor state, or alter source code for the images.
 On Debian/Ubuntu, install the capture-only dependencies:
 
 ```sh
-sudo apt-get install xvfb xauth xterm x11-utils fonts-dejavu-core python3-pil sqlite3
+sudo apt-get install xvfb xauth xterm x11-utils fonts-dejavu-core python3-pil sqlite3 libvterm-dev pkg-config
 ```
 
 Use the Go version from the repository's `go.mod`, then run from the repository root:
@@ -40,16 +40,17 @@ verified interaction sequence, not guaranteed identical pixels across machines.
 | `file-search.png` | Search `tasks`, confirm matching file paths, and open the handler from the results. |
 | `symbol-search.png` | Search `ListTasks`, confirm implementation paths and line numbers, and jump to the handler definition. |
 | `test-explorer.png` | Discover four Go tests and open `TestListTasks` at its definition. |
-| `test-run.png` | Run the checked tests through KiwiCode and observe actual successful `go test ./...` output. |
+| `test-run.png` | Run all tests with Ctrl+R and observe actual successful `go test ./...` output. |
 
 Each capture asserts expected text in the current real terminal frame before
 reading pixels from X11. Unexpected configuration errors, panics, command errors,
 and failed tests stop the capture. The script checks that the example workspace
 is byte-for-byte unchanged after the editor exits.
 
-The test explorer's checkboxes mean **selected to run**, not **passed**. The test
-output screenshot, not the checkbox state, demonstrates successful execution.
-The command panel is currently captured output, not a persistent interactive PTY.
+The committed images predate the per-test Run/Stop buttons and persistent
+interactive terminal. Their checkboxes meant **selected to run**, not **passed**.
+The updated capture sequence uses Ctrl+R and waits for the captured test result;
+the separate interactive terminal supports a persistent PTY shell.
 File search filters paths; function search uses discovered definitions. Neither
 screenshot represents a full-text repository search.
 

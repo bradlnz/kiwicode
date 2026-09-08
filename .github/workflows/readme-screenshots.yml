@@ -37,7 +37,7 @@ jobs:
       - name: Install terminal capture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth xterm x11-utils fonts-dejavu-core python3-pil sqlite3
+          sudo apt-get install -y xvfb xauth xterm x11-utils fonts-dejavu-core python3-pil sqlite3 libvterm-dev pkg-config
       - name: Test the example
         working-directory: examples/taskboard
         run: |

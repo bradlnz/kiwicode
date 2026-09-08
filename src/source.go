@@ -61,9 +61,12 @@ func (e *editor) loadSourceControl() {
 		e.sourceDone = make(chan sourceResult, 16)
 	}
 	generation := e.sourceGeneration
+	root, done := mustCwd(), e.sourceDone
 	go func() {
-		out, err := exec.Command("git", "status", "--short", "--untracked-files=all").CombinedOutput()
-		e.sourceDone <- sourceResult{string(out), err, generation}
+		cmd := exec.Command("git", "status", "--short", "--untracked-files=all")
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		done <- sourceResult{string(out), err, generation}
 	}()
 }
 
@@ -181,17 +184,23 @@ func (e *editor) loadSourceFileChanges(path string) {
 	}
 	generation := e.sourceDiffGeneration
 	change := *selected
+	root, done := mustCwd(), e.sourceDiffDone
 	go func() {
-		e.sourceDiffDone <- sourceDiffResult{path, sourceChangeMarkers(change), generation}
+		done <- sourceDiffResult{path, sourceChangeMarkers(change, root), generation}
 	}()
 }
 
 var sourceHunkPattern = regexp.MustCompile(`(?m)^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
-func sourceChangeMarkers(change sourceChange) map[int]rune {
+func sourceChangeMarkers(change sourceChange, root string) map[int]rune {
+	gitDiff := func(args ...string) ([]byte, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		return cmd.Output()
+	}
 	markers := map[int]rune{}
 	if change.status == "??" {
-		data, _ := os.ReadFile(change.path)
+		data, _ := os.ReadFile(workspacePath(root, change.path))
 		if len(data) == 0 {
 			return markers
 		}
@@ -200,16 +209,16 @@ func sourceChangeMarkers(change sourceChange) map[int]rune {
 		}
 		return markers
 	}
-	if out, err := exec.Command("git", "--no-pager", "diff", "--no-ext-diff", "--unified=0", "HEAD", "--", change.path).Output(); err == nil {
+	if out, err := gitDiff("--no-pager", "diff", "--no-ext-diff", "--unified=0", "HEAD", "--", change.path); err == nil {
 		return parseSourceMarkers(out)
 	}
 	var patches []byte
 	if change.staged() {
-		out, _ := exec.Command("git", "--no-pager", "diff", "--no-ext-diff", "--unified=0", "--cached", "--", change.path).Output()
+		out, _ := gitDiff("--no-pager", "diff", "--no-ext-diff", "--unified=0", "--cached", "--", change.path)
 		patches = append(patches, out...)
 	}
 	if change.unstaged() {
-		out, _ := exec.Command("git", "--no-pager", "diff", "--no-ext-diff", "--unified=0", "--", change.path).Output()
+		out, _ := gitDiff("--no-pager", "diff", "--no-ext-diff", "--unified=0", "--", change.path)
 		patches = append(patches, out...)
 	}
 	return parseSourceMarkers(patches)

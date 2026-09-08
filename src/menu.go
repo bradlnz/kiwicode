@@ -1,10 +1,11 @@
 package main
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+func projectSlotBarWidth() int { return settings.projectQuickPicks * 3 }
 
 type menuItem struct{ label, action string }
 
@@ -22,14 +23,13 @@ type topMenu struct {
 
 var topMenus = []topMenu{
 	{"File", []menuItem{{"Open File", "open-file"}, {"Open Folder", "open-folder"}, {"New File", "new"}, {"Save", "save"}, {"Close Tab", "close"}, {"Quit", "quit"}}},
-	{"Edit", []menuItem{{"Undo", "undo"}, {"File Search", "search"}, {"Function Search", "function-search"}, {"Go to Definition", "go-to-definition"}, {"Inspect Code", "inspect"}, {"Format", "format"}}},
+	{"Edit", []menuItem{{"Undo", "undo"}, {"File Search", "search"}, {"Function Search", "function-search"}, {"Go to Definition", "go-to-definition"}, {"Format", "format"}}},
 	{"View", []menuItem{{"Files Explorer", "files-explorer"}, {"Test Explorer", "test-explorer"}, {"Source Control", "source-control"}, {"Word Wrap", "word-wrap"}, {"Dependency Graph", "graph"}, {"Architecture Canvas", "architecture"}, {"Terminal", "terminal"}, {"Shortcuts", "help"}, {"Theme: Plum", "theme:plum"}, {"Theme: Forest", "theme:forest"}, {"Theme: Amber", "theme:amber"}, {"Theme: Mono", "theme:mono"}}},
-	{"Run", []menuItem{{"Run Application", "run"}, {"Stop Running Process", "stop-process"}, {"Build Containerd Image", "container-build"}, {"Run Sandboxed", "container-run"}, {"Debug / Stack Trace", "debug"}, {"Run Unit Tests", "test"}, {"Diagnostics", "diagnostics"}, {"AI Slop Scan", "slop"}}},
 	{"Source", []menuItem{{"Source Control", "source-control"}, {"Stage All", "source-stage-all"}, {"Commit…", "source-commit"}, {"Discard Selected…", "source-discard"}, {"Pull", "source-pull"}, {"Push", "source-push"}, {"Fetch", "source-fetch"}, {"Refresh", "refresh-source"}}},
-	{"Help", []menuItem{{"Keyboard Shortcuts", "help"}}},
+	{"Help", []menuItem{{"Keyboard Shortcuts", "help"}, {"About / Open Source Licenses", "licenses"}}},
 }
 
-var quickActions = []menuItem{{" Search ", "search"}, {" ▶ Run ", "run"}, {" ✓ Test ", "test"}, {" ◇ Inspect ", "inspect"}}
+var quickActions = []menuItem{{" [Run Tests] ", "run-tests"}, {" Search ", "search"}, {" Terminal ", "terminal"}}
 
 func (p *popupMenu) itemAt(x, y int) (menuItem, bool) {
 	i := y - p.y
@@ -89,6 +89,55 @@ func (e *editor) handlePopupKey(k key) {
 	}
 }
 
+func (e *editor) handleTopBarMouse(k key) bool {
+	if k.button == 2 && k.y == 1 {
+		if index, ok := e.projectSlotAt(k.x); ok {
+			e.setProjectSlot(index)
+			return true
+		}
+	}
+	if k.button == 0 && k.y == 1 {
+		if index, ok := e.projectSlotAt(k.x); ok {
+			e.popup = nil
+			e.openProjectSlot(index)
+			return true
+		}
+	}
+	if e.popup != nil {
+		if k.button == 0 {
+			if k.y == 1 {
+				e.popup = nil
+				if action := topActionAt(k.x); action != "" {
+					e.performAction(action)
+				} else {
+					e.openTopMenu(k.x)
+				}
+			} else if item, ok := e.popup.itemAt(k.x, k.y); ok {
+				e.popup = nil
+				e.performAction(item.action)
+			} else {
+				e.popup = nil
+			}
+		}
+		return true
+	}
+	if k.button != 0 || k.y != 1 {
+		return false
+	}
+	if action := topActionAt(k.x); action != "" {
+		e.performAction(action)
+	} else {
+		e.openTopMenu(k.x)
+	}
+	return true
+}
+
+func (e *editor) projectSlotAt(column int) (int, bool) {
+	start := max(1, e.cols-projectSlotBarWidth()+1)
+	index := (column - start) / 3
+	return index, column >= start && column <= e.cols && index >= 0 && index < settings.projectQuickPicks
+}
+
 func (e *editor) cycleTopMenu(delta int) {
 	if e.popup == nil || e.popup.top == "" {
 		return
@@ -121,10 +170,37 @@ func (e *editor) topBar() string {
 		out.WriteString(padding + menu.label + padding)
 	}
 	for _, item := range quickActions {
+		if item.action == "run-tests" {
+			label := item.label
+			if e.shell.testRun && e.shell.running {
+				label = " [Stop Tests]"
+			}
+			out.WriteString(ansiBG(colors.menu, colors.accent, "1") + label)
+			continue
+		}
 		out.WriteString(ansiBG(colors.top, colors.accent, "1") + item.label)
 	}
-	out.WriteString(ansiBG(colors.top, colors.text, "22") + "  " + plain(filepath.Base(mustCwd())))
-	return fitANSI(out.String(), e.cols)
+	if e.cols <= projectSlotBarWidth() {
+		return fitANSI(e.projectSlotBar(), e.cols)
+	}
+	return fitANSI(out.String(), e.cols-projectSlotBarWidth()) + e.projectSlotBar()
+}
+
+func (e *editor) projectSlotBar() string {
+	var out strings.Builder
+	for index := 0; index < settings.projectQuickPicks; index++ {
+		foreground, attributes := colors.muted, "2"
+		if index < len(e.projectSlots) && e.projectSlots[index] != "" {
+			foreground, attributes = colors.accent, "22"
+		}
+		if index == e.projectSlot {
+			out.WriteString(ansiBG(colors.topActive, colors.text, "1"))
+		} else {
+			out.WriteString(ansiBG(colors.top, foreground, attributes))
+		}
+		out.WriteString(" " + strconv.Itoa(index+1) + " ")
+	}
+	return out.String()
 }
 
 func topActionAt(column int) string {
@@ -149,18 +225,10 @@ func (e *editor) openContextMenu(k key) {
 		return
 	}
 	if k.y == 2 && k.x > side && !e.graph && !e.help && e.opsMode == "" {
-		if width := e.inspectorWidth(e.cols - side); width > 0 && k.x > e.cols-width {
-			e.openPopup(k.x, k.y, "", []menuItem{{"Close Inspector", "inspect"}})
-			return
-		}
 		if i, _ := e.tabAt(k.x - side - 1); i >= 0 {
 			e.active = i
 			e.openPopup(k.x, k.y, "", []menuItem{{"Save", "save"}, {"Format", "format"}, {"Close Tab", "close"}})
 		}
-		return
-	}
-	if width := e.inspectorWidth(e.cols - side); width > 0 && k.x > e.cols-width {
-		e.openPopup(k.x, k.y, "", []menuItem{{"Open Finding", "open-inspection"}, {"Refresh Inspector", "refresh-inspection"}, {"Close Inspector", "inspect"}})
 		return
 	}
 	if side > 0 && k.x <= side && k.y >= 3 {
@@ -187,7 +255,7 @@ func (e *editor) openContextMenu(k key) {
 		} else if e.testMode {
 			if i := e.testTop + k.y - 3; i >= 0 && i < len(e.tests) {
 				e.testSelected = i
-				e.openPopup(k.x, k.y, "", []menuItem{{"Run This Test", "run-selected-test"}, {"Run Checked Tests", "test"}, {"Open Test", "open-test"}, {"Toggle Checkbox", "toggle-test"}})
+				e.openPopup(k.x, k.y, "", []menuItem{{"Open Test", "open-test"}, {"Run / Stop Selected Test", "run-selected-test"}, {"Run All Tests", "run-tests"}})
 			}
 		} else if entries, i := e.visibleTree(), e.explorerTop+k.y-3; i >= 0 && i < len(entries) {
 			e.selected = i
@@ -213,25 +281,23 @@ func (e *editor) openContextMenu(k key) {
 		return
 	}
 	if e.opsMode != "" {
-		item := menuItem{"Refresh Architecture", "architecture"}
-		if e.opsMode == "debug trace" {
-			item = menuItem{"Run Debug Again", "debug"}
-		}
-		e.openPopup(k.x, k.y, "", []menuItem{item})
+		e.openPopup(k.x, k.y, "", []menuItem{{"Refresh Architecture", "refresh-architecture"}})
 		return
 	}
-	e.openPopup(k.x, k.y, "", []menuItem{{"Copy", "copy"}, {"Paste", "paste"}, {"Go to Definition", "go-to-definition"}, {"Save", "save"}, {"Format", "format"}, {"Inspect Code", "inspect"}, {"Run Application", "run"}, {"Debug / Stack Trace", "debug"}, {"Run Unit Tests", "test"}, {"AI Slop Scan", "slop"}})
+	e.openPopup(k.x, k.y, "", []menuItem{{"Copy", "copy"}, {"Paste", "paste"}, {"Go to Definition", "go-to-definition"}, {"Save", "save"}, {"Format", "format"}})
 }
 
 func (e *editor) performAction(action string) {
 	switch action {
+	case "run-selected-test":
+		if e.testSelected >= 0 && e.testSelected < len(e.tests) {
+			e.runTests(e.tests[e.testSelected])
+		}
+	case "licenses":
+		e.openLicenses()
 	case "open-file":
 		e.openSearch("files")
 	case "open-folder":
-		if e.dirty() {
-			e.status = "Save changes before opening another folder"
-			return
-		}
 		e.folderPrompt, e.searchMode = true, ""
 		e.folderInput = nil
 		e.updateFolderPredictions()
@@ -245,6 +311,8 @@ func (e *editor) performAction(action string) {
 		e.openSourceControl()
 	case "architecture":
 		e.openArchitecture()
+	case "refresh-architecture":
+		e.startNodeCanvas(true, true)
 	case "theme:plum", "theme:forest", "theme:amber", "theme:mono":
 		name := strings.TrimPrefix(action, "theme:")
 		setColorScheme(name)
@@ -262,14 +330,6 @@ func (e *editor) performAction(action string) {
 	case "open-test":
 		if len(e.tests) > 0 {
 			e.openTest(e.tests[e.testSelected])
-		}
-	case "toggle-test":
-		if len(e.tests) > 0 {
-			e.tests[e.testSelected].checked = !e.tests[e.testSelected].checked
-		}
-	case "run-selected-test":
-		if len(e.tests) > 0 {
-			e.runProject(true, e.testSelected)
 		}
 	case "open-change":
 		if len(e.sourceChanges) > 0 {
@@ -317,34 +377,6 @@ func (e *editor) performAction(action string) {
 		e.openSearch("functions")
 	case "refresh-graph":
 		e.loadGraph()
-	case "run":
-		e.runProject(false)
-	case "stop-process":
-		force := e.shell.stopping
-		if e.shell.stop() {
-			if force {
-				e.status = "Force-stopping running process…"
-			} else {
-				e.status = "Stopping running process… choose Stop again to force"
-			}
-		} else {
-			e.status = "No running process"
-		}
-	case "container-build":
-		e.runContainer(true)
-	case "container-run":
-		e.runContainer(false)
-	case "debug":
-		e.debugProject()
-	case "test":
-		e.runProject(true)
-	case "slop":
-		e.checkSlop()
-	case "open-inspection":
-		e.selectInspection(e.inspectionSelected*2 - e.inspectionTop)
-	case "refresh-inspection":
-		e.inspect = false
-		e.toggleInspector()
 	case "copy":
 		e.copySelection()
 	case "paste":
@@ -352,7 +384,7 @@ func (e *editor) performAction(action string) {
 	case "clear-panel":
 		e.shell.output = nil
 	case "close-panel":
-		e.clearModalViews()
+		e.shell.open, e.shell.focused = false, false
 	default:
 		if handled, quit := e.handleCommand(action); handled && quit {
 			e.quitRequested = true
@@ -365,6 +397,20 @@ func displayMenuItem(item menuItem) string {
 		return item.label + "  " + label
 	}
 	return item.label
+}
+
+func (e *editor) drawPopup(out *strings.Builder) {
+	if e.popup == nil {
+		return
+	}
+	for i, item := range e.popup.items {
+		itemStyle := ansiBG(colors.menu, colors.text, "22")
+		if i == e.popup.selected {
+			itemStyle = ansiBG(colors.menuActive, colors.text, "1")
+		}
+		padding := strings.Repeat(" ", settings.popupPadding)
+		writeCell(out, e.popup.y+i, e.popup.x, itemStyle+fit(padding+displayMenuItem(item)+padding, e.popup.width))
+	}
 }
 
 func topMenuWidth(menu topMenu) int { return len([]rune(menu.label)) + settings.topMenuPadding*2 }

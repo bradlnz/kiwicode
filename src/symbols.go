@@ -51,9 +51,17 @@ func projectSymbols(files []string) []codeSymbol {
 }
 
 func fileSymbols(path string) []codeSymbol {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 2<<20 {
+		return nil
+	}
+	return sourceSymbols(path, data)
+}
+
+func sourceSymbols(path string, data []byte) []codeSymbol {
 	if strings.EqualFold(filepath.Ext(path), ".go") {
 		set := token.NewFileSet()
-		file, err := parser.ParseFile(set, path, nil, 0)
+		file, err := parser.ParseFile(set, path, data, 0)
 		if err != nil {
 			return nil
 		}
@@ -64,10 +72,6 @@ func fileSymbols(path string) []codeSymbol {
 			}
 		}
 		return symbols
-	}
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) > 2<<20 {
-		return nil
 	}
 	var symbols []codeSymbol
 	for _, pattern := range symbolPatterns[strings.ToLower(filepath.Ext(path))] {

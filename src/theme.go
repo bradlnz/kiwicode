@@ -20,7 +20,7 @@ var schemes = map[string]colorScheme{
 var colors = schemes["plum"]
 
 func setColorScheme(name string) bool {
-	scheme, ok := schemes[name]
+	scheme, ok := settings.themes[name]
 	if ok {
 		colors = scheme
 	}
@@ -28,12 +28,16 @@ func setColorScheme(name string) bool {
 }
 
 func setThemeColor(name string, value int) error {
+	return setSchemeColor(&colors, name, value)
+}
+
+func setSchemeColor(scheme *colorScheme, name string, value int) error {
 	targets := map[string]*int{
-		"top": &colors.top, "top_active": &colors.topActive, "menu": &colors.menu, "menu_active": &colors.menuActive,
-		"text": &colors.text, "accent": &colors.accent, "muted": &colors.muted, "keyword": &colors.keyword,
-		"string": &colors.stringValue, "number": &colors.number, "function": &colors.function, "type": &colors.typeName,
-		"operator": &colors.operator, "parameter": &colors.parameter, "comment": &colors.comment,
-		"folder": &colors.folder,
+		"top": &scheme.top, "top_active": &scheme.topActive, "menu": &scheme.menu, "menu_active": &scheme.menuActive,
+		"text": &scheme.text, "accent": &scheme.accent, "muted": &scheme.muted, "keyword": &scheme.keyword,
+		"string": &scheme.stringValue, "number": &scheme.number, "function": &scheme.function, "type": &scheme.typeName,
+		"operator": &scheme.operator, "parameter": &scheme.parameter, "comment": &scheme.comment,
+		"folder": &scheme.folder,
 	}
 	target, ok := targets[name]
 	if !ok {

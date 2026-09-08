@@ -26,7 +26,7 @@ func (e *editor) resize() {
 }
 
 func (e *editor) sidebarWidth() int {
-	if e.workspace == workspaceAgent || !e.showExplorer {
+	if !e.showExplorer {
 		return 0
 	}
 	width := sidebarActivityWidth()
@@ -37,23 +37,29 @@ func (e *editor) sidebarWidth() int {
 		}
 	} else if e.testMode {
 		for _, test := range e.tests {
-			width = max(width, len([]rune(testRowLabel(test)))+3)
+			width = max(width, len([]rune(testRowLabel(test)))+3+testButtonWidth)
 		}
 	} else {
-		for _, entry := range e.visibleTree() {
-			width = max(width, len([]rune(e.explorerTreeLabel(entry)))+3)
-		}
+		e.visibleTree()
+		width = max(width, e.visibleTreeWidth)
 	}
 	return min(max(16, width), max(16, e.cols*settings.explorerMaxPercent/100))
 }
 
+func (e *editor) codeAreaWidth() int { return e.cols - e.sidebarWidth() }
+
 func (e *editor) panelHeights() (content, shell int) {
-	return max(1, e.rows-3), 0
+	content = max(1, e.rows-3)
+	if e.shell.open && content >= 7 {
+		shell = min(max(4, settings.terminalHeight+1), content-5)
+		content -= shell
+	}
+	return content, shell
 }
 
 func (e *editor) draw() {
-	if e.workspace == workspaceAgent {
-		fmt.Print(e.agentFrame())
+	if e.switching != nil {
+		fmt.Print(e.workspaceSwitchFrame())
 		return
 	}
 	if e.rows < 5 || e.cols < 30 {
@@ -62,10 +68,7 @@ func (e *editor) draw() {
 	}
 	side := e.sidebarWidth()
 	editorX := side
-	availableWidth := e.cols - editorX
-	inspectWidth := e.inspectorWidth(availableWidth)
-	editorWidth := availableWidth - inspectWidth
-	inspectX := editorX + editorWidth
+	editorWidth := e.cols - editorX
 	totalHeight := e.rows - 3
 	contentHeight, _ := e.panelHeights()
 	explorerEntries := e.visibleTree()
@@ -116,10 +119,6 @@ func (e *editor) draw() {
 	} else if e.selected >= e.explorerTop+totalHeight {
 		e.explorerTop = e.selected - totalHeight + 1
 	}
-	if e.opsMode == "architecture canvas" && e.canvasWidth != editorWidth {
-		e.opsLines = architectureCanvas(e.tree, e.files, editorWidth)
-		e.canvasWidth = editorWidth
-	}
 
 	var out strings.Builder
 	out.WriteString("\x1b[0;49m\x1b[?25l\x1b[H")
@@ -131,10 +130,6 @@ func (e *editor) draw() {
 	}
 	header := e.workspaceTabs(editorWidth)
 	writeCell(&out, 2, editorX+1, "\x1b[22m"+ansiFG(colors.text)+header)
-	if inspectWidth > 0 {
-		writeCell(&out, 2, inspectX+1, "\x1b[1m"+ansiFG(colors.accent)+fit(" INSPECT · SOLID / DRY", inspectWidth))
-	}
-	inspectRows := e.inspectionRows(inspectWidth)
 	commitLines := e.sourceCommitLines(max(1, side-2))
 
 	for y := 0; y < totalHeight; y++ {
@@ -196,6 +191,10 @@ func (e *editor) draw() {
 				}
 			}
 			writeCell(&out, row, 1, style(selected, "\x1b[1m"+ansiFG(colors.accent), "\x1b[22m"+ansiFG(rowColor))+fit(text, side))
+			if e.testMode && !e.sourceMode && e.testTop+y < len(e.tests) {
+				writeCell(&out, row, 1, style(selected, "\x1b[1m"+ansiFG(colors.accent), "\x1b[22m"+ansiFG(rowColor))+fit(text, side-testButtonWidth))
+				writeCell(&out, row, side-testButtonWidth+1, ansiBG(colors.menu, colors.accent, "1")+e.testButtonLabel(e.tests[e.testTop+y]))
+			}
 		}
 
 		line := ""
@@ -210,7 +209,7 @@ func (e *editor) draw() {
 				number = fmt.Sprintf("%*d", gutter-1, view.row+1) + e.sourceGutter(b.path, view.row+1)
 			}
 			line = sourceLineHighlight(marker) + ansiFG(colors.muted) + number + ansiFG(colors.text) + cropANSI(highlightedLine(view.row), view.segment*wrapWidth, wrapWidth)
-		} else if !e.wordWrap {
+		} else if !e.wordWrap && y < contentHeight {
 			lineIndex := b.scrollY + y
 			if lineIndex < len(b.lines) {
 				marker := rune(0)
@@ -222,16 +221,6 @@ func (e *editor) draw() {
 			}
 		}
 		writeCell(&out, row, editorX+1, "\x1b[49m"+fitANSI(line, editorWidth))
-		if inspectWidth > 0 {
-			inspectLine := ""
-			index := e.inspectionTop + y
-			if index < len(inspectRows) {
-				entry := inspectRows[index]
-				selected := entry.finding >= 0 && entry.finding == e.inspectionSelected
-				inspectLine = style(selected, ansiBG(colors.menuActive, colors.text, "1"), ansiFG(colors.muted)) + entry.text
-			}
-			writeCell(&out, row, inspectX+1, fitANSI(inspectLine, inspectWidth))
-		}
 	}
 	e.drawSelection(&out, editorX, contentHeight)
 
@@ -261,18 +250,13 @@ func (e *editor) draw() {
 		status += strings.Repeat(" ", e.cols-len([]rune(left))-len([]rune(right))) + right
 	}
 	writeCell(&out, e.rows, 1, "\x1b[49;1m"+ansiFG(colors.accent)+fit(status, e.cols))
-	modalRow, modalCol := e.drawModal(&out, editorX, editorWidth, totalHeight)
-
-	if e.popup != nil {
-		for i, item := range e.popup.items {
-			itemStyle := ansiBG(colors.menu, colors.text, "22")
-			if i == e.popup.selected {
-				itemStyle = ansiBG(colors.menuActive, colors.text, "1")
-			}
-			padding := strings.Repeat(" ", settings.popupPadding)
-			writeCell(&out, e.popup.y+i, e.popup.x, itemStyle+fit(padding+displayMenuItem(item)+padding, e.popup.width))
-		}
+	modalRow, modalCol := e.drawModal(&out, editorX, editorWidth, contentHeight)
+	terminalRow, terminalCol := e.drawTerminalPanel(&out)
+	if e.workspaceDone != nil {
+		writeCell(&out, max(3, e.rows/2), editorX+1, ansiFG(colors.accent)+fit(" Loading project…", editorWidth))
 	}
+
+	e.drawPopup(&out)
 	if e.searchMode != "" {
 		width := min(60, e.cols-4)
 		x := max(2, (e.cols-width)/2)
@@ -334,9 +318,13 @@ func (e *editor) draw() {
 		row := 3 + sourceInputStart + len(lines) - 1
 		column := min(e.sidebarWidth(), len([]rune(lines[len(lines)-1]))+2)
 		fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", row, max(1, column))
+	} else if e.shell.open && e.shell.focused {
+		if terminalRow > 0 {
+			fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", terminalRow, terminalCol)
+		}
 	} else if modalRow > 0 {
 		fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", modalRow, modalCol)
-	} else if !e.explorer && !e.graph && !e.help && e.opsMode == "" {
+	} else if !e.explorer && !e.modalViewOpen() {
 		cell := cursorCell(b.lines[b.row], b.col)
 		x, y := editorX+gutter+cell-b.scrollX+1, 3+b.row-b.scrollY
 		if e.wordWrap {
@@ -376,55 +364,70 @@ func (e *editor) draw() {
 		fmt.Fprintf(&out, "\x1b[%d;%dH\x1b[?25h", y, x)
 	}
 	out.WriteString("\x1b[0m")
-	fmt.Print(out.String())
+	e.lastFrame = out.String()
+	fmt.Print(e.lastFrame)
 }
 
 func (e *editor) drawModal(out *strings.Builder, editorX, editorWidth, totalHeight int) (cursorRow, cursorCol int) {
 	if !e.modalViewOpen() {
 		return 0, 0
 	}
-	width, height := min(100, editorWidth), min(24, totalHeight)
+	if c := e.activeNodeCanvas(); c != nil {
+		c.draw(out, editorX+1, 3, editorWidth, totalHeight)
+		return 0, 0
+	}
+	width, height := editorWidth, totalHeight
 	if width < 8 || height < 3 {
 		return 0, 0
 	}
-	x, y := editorX+(editorWidth-width)/2+1, 3+(totalHeight-height)/2
-	innerWidth, contentRows := width-2, height-2
-	title, prompt := "", ""
+	x, y := editorX+1, 3
 	var lines []string
 	switch {
-	case e.shell.open:
-		title, prompt = e.shellTitleAndPrompt()
-		title = strings.TrimSpace(title)
-		contentRows--
-		lines = e.shell.visibleLines(max(0, contentRows))
 	case e.help:
-		title, lines = "KEYBOARD SHORTCUTS", shortcutHelpLines()
-	case e.graph:
-		title = "DEPENDENCY GRAPH"
-		lines = e.graphLines[min(e.graphTop, len(e.graphLines)):]
+		lines = shortcutHelpLines()
 	case e.opsMode != "":
-		title = strings.ToUpper(e.opsMode) + " VIEW"
 		lines = e.opsLines[min(e.opsTop, len(e.opsLines)):]
 	}
-	modalStyle := ansiBG(colors.menu, colors.text, "22")
-	headingStyle := modalStyle
-	heading := fit(" "+title+" · Esc close ", innerWidth)
-	writeCell(out, y, x, headingStyle+"╭"+heading+"╮")
-	for row := 0; row < height-2; row++ {
+	viewStyle := ansiFG(colors.text)
+	for row := 0; row < height; row++ {
 		text := ""
-		if row < contentRows && row < len(lines) {
+		if row < len(lines) {
 			text = " " + plain(lines[row])
-		} else if prompt != "" && row == height-3 {
-			text, _ = panelPromptLine(" "+prompt, innerWidth)
 		}
-		writeCell(out, y+row+1, x, modalStyle+"│"+fitANSI(text, innerWidth)+modalStyle+"│")
-	}
-	writeCell(out, y+height-1, x, modalStyle+"╰"+strings.Repeat("─", innerWidth)+"╯")
-	if prompt != "" {
-		_, cursor := panelPromptLine(" "+prompt, innerWidth)
-		return y + height - 2, x + 1 + cursor
+		writeCell(out, y+row, x, viewStyle+fitANSI(text, width))
 	}
 	return 0, 0
+}
+
+func (e *editor) drawTerminalPanel(out *strings.Builder) (int, int) {
+	content, height := e.panelHeights()
+	if height == 0 {
+		return 0, 0
+	}
+	x, y, width := e.sidebarWidth()+1, 3+content, e.cols-e.sidebarWidth()
+	if width < 1 {
+		return 0, 0
+	}
+	title, prompt := e.shellTitleAndPrompt()
+	writeCell(out, y, x, ansiBG(colors.menu, colors.accent, "1")+fit(title+" · Ctrl+T hide · click to focus", width))
+	y++
+	height--
+	if e.shell.interactive && e.shell.terminal != nil {
+		return e.shell.terminal.draw(out, x, y, width, height)
+	}
+	lines := e.shell.visibleLines(max(0, height-1))
+	for row := 0; row < height; row++ {
+		text := ""
+		if row < len(lines) {
+			text = " " + plain(lines[row])
+		}
+		if row == height-1 {
+			text, _ = panelPromptLine(" "+prompt, width)
+		}
+		writeCell(out, y+row, x, ansiFG(colors.text)+fitANSI(text, width))
+	}
+	_, cursor := panelPromptLine(" "+prompt, width)
+	return y + height - 1, x + cursor
 }
 
 func (e *editor) sourceGutter(path string, row int) string {
@@ -494,7 +497,7 @@ func (e *editor) sidebarActivityBar() string {
 	for _, tab := range sidebarTabs {
 		active := e.explorer && (tab.mode == "files" && !e.testMode && !e.sourceMode || tab.mode == "tests" && e.testMode || tab.mode == "source" && e.sourceMode)
 		padding := strings.Repeat(" ", settings.sidebarTabPadding)
-		bar.WriteString(padding + style(active, "\x1b[1;4m"+ansiFG(colors.accent), "\x1b[22;24m"+ansiFG(colors.text)) + settings.icons[tab.mode] + "\x1b[22;24m" + ansiFG(colors.text) + padding)
+		bar.WriteString(padding + style(active, "\x1b[1m"+ansiFG(colors.accent), "\x1b[22m"+ansiFG(colors.text)) + settings.icons[tab.mode] + "\x1b[22m" + ansiFG(colors.text) + padding)
 	}
 	return bar.String()
 }
@@ -513,6 +516,15 @@ func (e *editor) explorerTreeLabel(entry treeEntry) string {
 }
 
 func (e *editor) shellTitleAndPrompt() (string, string) {
+	if e.shell.testRun {
+		if e.shell.running {
+			if e.shell.stopping {
+				return " TESTS - stopping", "Click Stop Tests again to force stop"
+			}
+			return " TESTS - running", "Output appears when finished; click Stop Tests to cancel"
+		}
+		return " TEST RESULTS", "Click Run Tests to run again"
+	}
 	if e.shell.running {
 		if e.shell.stopping {
 			return " TERMINAL — stopping…  Ctrl+C force", "Waiting for process to exit…"
@@ -530,18 +542,69 @@ func panelPromptLine(text string, width int) (string, int) {
 	return fit(string(prompt), width), min(len(prompt), max(0, width-1))
 }
 
+const workspaceViewTabWidth = 22
+
+func (e *editor) workspaceTabs(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	prefix := ""
+	if label := e.workspaceViewLabel(); label != "" {
+		viewWidth := min(width, workspaceViewTabWidth)
+		prefix = "\x1b[1m" + ansiFG(colors.function) + fit(" "+label, viewWidth) + "\x1b[22m"
+		width -= viewWidth
+	}
+	return prefix + e.tabs(width)
+}
+
+func (e *editor) selectWorkspaceTab(column int) {
+	if column < 0 || column >= e.codeAreaWidth() {
+		return
+	}
+	if e.modalViewOpen() {
+		if column < workspaceViewTabWidth {
+			return
+		}
+		column -= workspaceViewTabWidth
+	}
+	// Resolve the file while the view still reserves its tab width.
+	e.selectTab(column)
+}
+
+func (e *editor) workspaceViewLabel() string {
+	switch {
+	case e.opsMode == "architecture canvas":
+		return "Architecture Canvas"
+	case e.opsMode != "":
+		return e.opsMode
+	case e.graph:
+		return "Dependency Graph"
+	case e.help:
+		return "Shortcuts"
+	}
+	return ""
+}
+
+func (e *editor) fileTabsWidth() int {
+	width := e.codeAreaWidth()
+	if e.modalViewOpen() {
+		width -= workspaceViewTabWidth
+	}
+	return max(0, width)
+}
+
 func (e *editor) tabs(width int) string {
 	var s strings.Builder
-	start, end := e.visibleTabRange()
+	start, end := e.visibleTabRange(width)
 	for i := start; i < end; i++ {
 		b := e.buffers[i]
-		if e.workspace == workspaceFile && i == e.active {
-			s.WriteString("\x1b[1;4m" + ansiFG(colors.text))
+		if !e.modalViewOpen() && i == e.active {
+			s.WriteString("\x1b[1m" + ansiFG(colors.text))
 		} else {
-			s.WriteString("\x1b[22;24m" + ansiFG(colors.muted))
+			s.WriteString("\x1b[22m" + ansiFG(colors.muted))
 		}
 		padding := strings.Repeat(" ", settings.tabPadding)
-		s.WriteString(padding + tabLabel(b) + padding + "×" + padding + "\x1b[22;24m" + ansiFG(colors.text))
+		s.WriteString(padding + tabLabel(b) + padding + "×" + padding + "\x1b[22m" + ansiFG(colors.text))
 	}
 	return fitANSI(s.String(), width)
 }
@@ -556,9 +619,22 @@ func tabLabel(b *buffer) string {
 
 func tabWidth(b *buffer) int { return len([]rune(tabLabel(b))) + settings.tabPadding*3 + 1 }
 
-func (e *editor) visibleTabRange() (int, int) {
-	start := max(0, min(e.active, len(e.buffers)-1)-5)
-	return start, min(len(e.buffers), start+6)
+func (e *editor) visibleTabRange(width int) (int, int) {
+	if width <= 0 || len(e.buffers) == 0 {
+		return 0, 0
+	}
+	start := max(0, min(e.active, len(e.buffers)-1))
+	end := start + 1
+	used := min(width, tabWidth(e.buffers[start]))
+	for start > 0 && used+tabWidth(e.buffers[start-1]) <= width {
+		start--
+		used += tabWidth(e.buffers[start])
+	}
+	for end < len(e.buffers) && used+tabWidth(e.buffers[end]) <= width {
+		used += tabWidth(e.buffers[end])
+		end++
+	}
+	return start, end
 }
 
 func mode(explorer bool) string {

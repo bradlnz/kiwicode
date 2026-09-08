@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -15,7 +16,6 @@ type persistedState struct {
 	Buffers         []persistedBuffer              `json:"buffers"`
 	ActivePath      string                         `json:"active_path"`
 	Collapsed       map[string]bool                `json:"collapsed"`
-	TestChecks      map[string]bool                `json:"test_checks"`
 	ShowExplorer    bool                           `json:"show_explorer"`
 	Explorer        bool                           `json:"explorer"`
 	TestMode        bool                           `json:"test_mode"`
@@ -35,6 +35,7 @@ type persistedState struct {
 }
 
 type persistedCompletion struct {
+	Receivers   map[string]string              `json:"receivers,omitempty"`
 	Words       []string                       `json:"words"`
 	Members     map[string][]string            `json:"members"`
 	Definitions map[string]persistedDefinition `json:"definitions"`
@@ -56,24 +57,102 @@ type persistedBuffer struct {
 	Dirty   bool   `json:"dirty"`
 }
 
-func stateDatabasePath() string {
+const maxProjectSlots = 9
+
+func stateRoot() string {
 	root := os.Getenv("XDG_STATE_HOME")
 	if root == "" {
 		home, _ := os.UserHomeDir()
 		root = filepath.Join(home, ".local", "state")
 	}
+	return filepath.Join(root, "code-editor")
+}
+
+func stateDatabasePath() string {
 	workspace, _ := filepath.Abs(".")
 	hash := sha256.Sum256([]byte(workspace))
-	return filepath.Join(root, "code-editor", base64.RawURLEncoding.EncodeToString(hash[:12])+".db")
+	return filepath.Join(stateRoot(), base64.RawURLEncoding.EncodeToString(hash[:12])+".db")
+}
+
+func loadProjectSlots(current string) ([]string, int, error) {
+	path := filepath.Join(stateRoot(), "projects.json")
+	data, readErr := os.ReadFile(path)
+	var saved []string
+	changed := errors.Is(readErr, os.ErrNotExist) || json.Unmarshal(data, &saved) != nil
+	slots := make([]string, 0, maxProjectSlots)
+	for _, project := range saved {
+		if len(slots) == maxProjectSlots {
+			changed = true
+			break
+		}
+		if project == "" {
+			slots = append(slots, "")
+			continue
+		}
+		project = filepath.Clean(project)
+		info, err := os.Stat(project)
+		if !filepath.IsAbs(project) || slices.Contains(slots, project) || err != nil || !info.IsDir() {
+			changed = true
+			slots = append(slots, "")
+			continue
+		}
+		slots = append(slots, project)
+	}
+	current, _ = filepath.Abs(current)
+	index := slices.Index(slots, current)
+	if index < 0 {
+		for i := 0; i < settings.projectQuickPicks; i++ {
+			if i == len(slots) {
+				slots = append(slots, current)
+				index = i
+				break
+			}
+			if slots[i] == "" {
+				slots[i], index = current, i
+				break
+			}
+		}
+		changed = changed || index >= 0
+	}
+	// Reducing the visible count must not erase saved assignments.
+	if index >= settings.projectQuickPicks {
+		index = -1
+	}
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return slots, index, readErr
+	}
+	if changed {
+		if err := saveProjectSlots(slots); err != nil {
+			return slots, index, err
+		}
+	}
+	return slots, index, nil
+}
+
+func saveProjectSlots(slots []string) error {
+	path := filepath.Join(stateRoot(), "projects.json")
+	data, _ := json.Marshal(slots)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
 }
 
 func (e *editor) saveState() error {
+	data, err := e.stateJSON()
+	if err != nil {
+		return err
+	}
+	return saveStateData(stateDatabasePath(), data)
+}
+
+func (e *editor) stateJSON() ([]byte, error) {
 	state := persistedState{
 		Collapsed: e.collapsed, ShowExplorer: e.showExplorer, Explorer: e.explorer,
 		TestMode: e.testMode, SourceMode: e.sourceMode, Selected: e.selected, ExplorerTop: e.explorerTop,
 		TestSelected: e.testSelected, TestTop: e.testTop, SourceSelected: e.sourceSelected, SourceTop: e.sourceTop,
 		Theme: colors.name, WordWrap: e.wordWrap, TerminalInput: string(e.shell.input), TerminalOutput: e.shell.output, TerminalHistory: e.shell.history,
-		TestChecks: map[string]bool{}, CompletionCache: map[string]persistedCompletion{},
+		CompletionCache: map[string]persistedCompletion{},
 	}
 	for path, completion := range e.completionCache {
 		definitions := make(map[string]persistedDefinition, len(completion.definitions))
@@ -81,7 +160,7 @@ func (e *editor) saveState() error {
 			definitions[name] = persistedDefinition{definition.path, definition.row}
 		}
 		state.CompletionCache[path] = persistedCompletion{
-			Words: completion.words, Members: completion.members, Definitions: definitions,
+			Words: completion.words, Members: completion.members, Definitions: definitions, Receivers: completion.receivers,
 		}
 	}
 	if len(e.buffers) > 0 {
@@ -93,20 +172,17 @@ func (e *editor) saveState() error {
 			Row: b.row, Col: b.col, ScrollY: b.scrollY, ScrollX: b.scrollX, Dirty: b.dirty,
 		})
 	}
-	for _, test := range e.tests {
-		state.TestChecks[test.path+"\x00"+test.name] = test.checked
-	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(stateDatabasePath()), 0755); err != nil {
+	return json.Marshal(state)
+}
+
+func saveStateData(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	sql := "CREATE TABLE IF NOT EXISTS editor_state (id INTEGER PRIMARY KEY, snapshot TEXT NOT NULL);" +
 		"INSERT INTO editor_state(id,snapshot) VALUES(1,'" + encoded + "') ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot;"
-	cmd := exec.Command("sqlite3", "-batch", stateDatabasePath())
+	cmd := exec.Command("sqlite3", "-batch", path)
 	cmd.Stdin = strings.NewReader(sql)
 	return cmd.Run()
 }
@@ -133,11 +209,7 @@ func (e *editor) restoreState() error {
 	for path, collapsed := range state.Collapsed {
 		e.collapsed[path] = collapsed
 	}
-	for index := range e.tests {
-		if checked, ok := state.TestChecks[e.tests[index].path+"\x00"+e.tests[index].name]; ok {
-			e.tests[index].checked = checked
-		}
-	}
+	e.visibleTreeCache = nil
 	e.buffers = nil
 	for _, saved := range state.Buffers {
 		content := []byte(saved.Content)
@@ -183,7 +255,7 @@ func (e *editor) restoreState() error {
 				}
 			}
 			e.completionCache[path] = dependencyCompletion{
-				words: completion.Words, members: completion.Members, definitions: definitions,
+				words: completion.Words, members: completion.Members, definitions: definitions, receivers: completion.Receivers,
 			}
 		}
 	}

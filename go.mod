@@ -1,3 +1,3 @@
-module code-editor
+module kiwicode
 
 go 1.27
