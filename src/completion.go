@@ -126,9 +126,9 @@ func completionFamily(ext string) string {
 	switch strings.ToLower(ext) {
 	case ".go":
 		return "go"
-	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx":
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts":
 		return "script"
-	case ".py":
+	case ".py", ".pyi":
 		return "python"
 	case ".rs":
 		return "rust"
@@ -153,6 +153,9 @@ func completionFamily(ext string) string {
 func (e *editor) suggestion() []rune {
 	b := e.current()
 	if candidates := e.completionSuggestions(); len(candidates) > 0 {
+		if len(e.languageItems()) > 0 {
+			return nil // Server edits can replace ranges and add imports; the dropdown accepts them.
+		}
 		return []rune(candidates[e.completionSelected])[len([]rune(b.completionPrefix())):]
 	}
 	if completionFamily(filepath.Ext(b.path)) == "" {
@@ -187,7 +190,7 @@ func (e *editor) pollCompletion() bool {
 			e.completionDirty = false
 			if result.path == e.current().path {
 				receiver, _, memberAccess := memberAccessAtCursor(e.current())
-				if memberAccess {
+				if memberAccess && len(e.languageItems()) == 0 {
 					count := len(dependencyCandidates(e.current(), result.completion))
 					if count == 0 {
 						e.status = "No members found for " + receiver
@@ -469,7 +472,21 @@ func (e *editor) completionSuggestions() []string {
 		e.completionSelected, e.completionDismissed = 0, false
 		e.completionBuffer, e.completionRow, e.completionCol = b, b.row, b.col
 	}
-	if e.completionDismissed || completionFamily(filepath.Ext(b.path)) == "" || !e.selection.empty() {
+	if e.completionDismissed || !e.selection.empty() {
+		return nil
+	}
+	if items := e.languageItems(); len(items) > 0 {
+		labels := make([]string, len(items))
+		for i, item := range items {
+			labels[i] = plain(item.Label)
+			if item.Detail != "" {
+				labels[i] += " · " + plain(strings.Join(strings.Fields(item.Detail), " "))
+			}
+		}
+		e.completionSelected = min(e.completionSelected, len(labels)-1)
+		return labels
+	}
+	if completionFamily(filepath.Ext(b.path)) == "" {
 		return nil
 	}
 	completion, cached := e.completionCache[b.path]
@@ -502,6 +519,10 @@ func (e *editor) handleCompletionKey(k key) bool {
 	case k.code == keyDown:
 		e.completionSelected = (e.completionSelected + 1) % len(candidates)
 	case k.code == keyTab || k.code == keyEnter:
+		if items := e.languageItems(); len(items) > 0 {
+			e.acceptLanguageCompletion(items[e.completionSelected])
+			return true
+		}
 		b := e.current()
 		b.insert([]rune(candidates[e.completionSelected])[len([]rune(b.completionPrefix())):])
 		e.markCompletionDirty()

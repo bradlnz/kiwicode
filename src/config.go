@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 )
 
 type editorSettings struct {
+	languageServers     map[string][]string
 	themes              map[string]colorScheme
 	bindings            map[rune]string
 	terminalHeight      int
@@ -42,6 +44,7 @@ var shortcutNames = map[string]string{
 	"function-search":  "Function Search",
 	"run-tests":        "Run / Stop Tests",
 	"go-to-definition": "Go to Definition",
+	"symbol-info":      "Symbol Info",
 	"architecture":     "Architecture Canvas",
 	"word-wrap":        "Word Wrap",
 	"source-control":   "Source Control",
@@ -53,8 +56,9 @@ func init() { resetSettings() }
 func resetSettings() {
 	colors = schemes["plum"]
 	settings = editorSettings{
-		themes:   map[string]colorScheme{},
-		bindings: map[rune]string{}, terminalHeight: 10, projectQuickPicks: 5, explorerMaxPercent: 50,
+		languageServers: map[string][]string{},
+		themes:          map[string]colorScheme{},
+		bindings:        map[rune]string{}, terminalHeight: 10, projectQuickPicks: 5, explorerMaxPercent: 50,
 		topMenuPadding: 1, popupPadding: 1, tabPadding: 2, sidebarTabPadding: 2, explorerIndent: 2,
 		icons: map[string]string{"files": "▤", "tests": "✓", "source": "⑂", "folder_open": "▾", "folder_closed": "▸"},
 	}
@@ -149,6 +153,15 @@ func applySetting(section, key, value string) error {
 		return nil
 	}
 	switch section {
+	case "language_servers":
+		var command []string
+		if value != "off" {
+			if err := json.Unmarshal([]byte(value), &command); err != nil || len(command) == 0 || command[0] == "" {
+				return fmt.Errorf("language server %s must be a JSON command array or off", key)
+			}
+		}
+		settings.languageServers[key] = command
+		return nil
 	case "tests":
 		if key == "selected_command" {
 			settings.selectedTestCommand = strings.TrimSpace(value)

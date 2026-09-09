@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +41,7 @@ type buffer struct {
 	newline          string
 	undo             []bufferSnapshot
 	suppressUndo     bool
+	revision         int
 }
 
 type bufferSnapshot struct {
@@ -229,6 +229,7 @@ func (b *buffer) recordUndo() {
 // replacementCount lines. The saved runes are owned by this entry: subsequent
 // in-place edits cannot mutate earlier undo history.
 func (b *buffer) recordUndoRange(start, end, replacementCount int) {
+	b.revision++
 	if b.suppressUndo {
 		return
 	}
@@ -256,6 +257,7 @@ func (b *buffer) undoChange() bool {
 		return false
 	}
 	index := len(b.undo) - 1
+	b.revision++
 	last := b.undo[index]
 	b.undo[index] = bufferSnapshot{} // Release popped history for GC.
 	b.undo = b.undo[:index]
@@ -315,7 +317,7 @@ func (b *buffer) wordCandidates(extra []string) []string {
 			words[word] = true
 		}
 	}
-	if syntax, ok := languageSyntaxes[strings.ToLower(filepath.Ext(b.path))]; ok {
+	if syntax, ok := languageSyntaxes[syntaxExtension(b.path)]; ok {
 		for word := range syntax.keywords {
 			consider(word)
 		}

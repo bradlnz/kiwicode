@@ -133,3 +133,13 @@ shortcuts:
 #   command: go test ./...
 # Terminal: $SHELL -i loads ~/.bashrc (Bash), ~/.zshrc (zsh), etc.
 # Ctrl+T returns to the editor; other Ctrl keys go to the terminal while focused.
+
+# Optional installed language servers; commands are JSON argument arrays, or off.
+# language_servers:
+#   go: ["gopls"]
+#   csharp: ["csharp-ls"]
+#   typescript: ["typescript-language-server", "--stdio"]
+#   python: ["pyright-langserver", "--stdio"]
+# Edit > Symbol Info shows types and documentation; optional shortcut:
+# shortcuts:
+#   symbol_info: ctrl+y

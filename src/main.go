@@ -149,6 +149,7 @@ func (e *editor) pollEditor(configErr error) bool {
 		e.status = "Config: " + configErr.Error()
 	}
 	completionDone := e.pollCompletion()
+	languageDone := e.pollLanguages()
 	definitionDone := e.pollDefinition()
 	sourceDone := e.pollSourceControl()
 	filesChanged := e.pollFileTree()
@@ -158,7 +159,7 @@ func (e *editor) pollEditor(configErr error) bool {
 		e.refreshFiles()
 		e.reloadCleanBuffers()
 	}
-	return filesChanged || terminalStarted || canvasChanged || checkpointChanged || workspaceDone || shellDone || completionDone || definitionDone || sourceDone
+	return filesChanged || terminalStarted || canvasChanged || checkpointChanged || workspaceDone || shellDone || completionDone || languageDone || definitionDone || sourceDone
 }
 
 type editorLoad struct {

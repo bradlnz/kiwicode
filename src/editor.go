@@ -11,6 +11,7 @@ import (
 )
 
 type editor struct {
+	languages                 *languageIntelligence
 	workspaces                map[string]cachedWorkspace
 	switching                 *workspaceSwitch
 	lastFrame                 string
@@ -451,6 +452,11 @@ func (e *editor) handleCommand(action string) (handled, quit bool) {
 		return true, false
 	case "go-to-definition":
 		e.goToDefinition()
+		return true, false
+	case "symbol-info":
+		if !e.requestLanguage("hover") {
+			e.status = "Symbol info requires an installed language server"
+		}
 		return true, false
 	case "architecture":
 		e.openArchitecture()

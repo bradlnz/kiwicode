@@ -23,6 +23,13 @@ type definitionLocation struct {
 }
 
 func (e *editor) goToDefinition() {
+	if e.requestLanguage("definition") {
+		return
+	}
+	e.goToSourceDefinition()
+}
+
+func (e *editor) goToSourceDefinition() {
 	if e.definitionLoading {
 		e.status = "Go to Definition: loading…"
 		return

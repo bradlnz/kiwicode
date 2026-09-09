@@ -73,8 +73,25 @@ func wordSet(words string) map[string]bool {
 	return set
 }
 
-func isMarkupDocument(path string, lines [][]rune) bool {
+func syntaxExtension(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".mjs", ".cjs":
+		return ".js"
+	case ".mts", ".cts":
+		return ".ts"
+	case ".pyi":
+		return ".py"
+	case ".cc", ".cxx":
+		return ".cpp"
+	case ".kts":
+		return ".kt"
+	}
+	return ext
+}
+
+func isMarkupDocument(path string, lines [][]rune) bool {
+	ext := syntaxExtension(path)
 	if markupExtensions[ext] {
 		return true
 	}
@@ -162,7 +179,7 @@ func hasMarkupStructure(text string) bool {
 }
 
 func highlightLine(path string, line []rune) string {
-	ext := strings.ToLower(filepath.Ext(path))
+	ext := syntaxExtension(path)
 	if ext == ".erb" {
 		return highlightERB(line)
 	}

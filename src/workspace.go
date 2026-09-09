@@ -181,6 +181,7 @@ func (e *editor) switchWorkspaceNow(path string, create bool) {
 				_ = old.editor.checkpoint.close()
 			}
 			old.editor.shell.terminal.close()
+			old.editor.closeLanguages()
 			delete(cache, root)
 			break
 		}
@@ -247,6 +248,7 @@ func (e *editor) closeWorkspaces() {
 		*e = *<-e.switching.done
 	}
 	e.shell.terminal.close()
+	e.closeLanguages()
 	if e.checkpoint != nil {
 		_ = e.checkpoint.close() // Drain older writes before the final snapshot.
 	}
@@ -262,5 +264,6 @@ func (e *editor) closeWorkspaces() {
 			}
 		}
 		cached.editor.shell.terminal.close()
+		cached.editor.closeLanguages()
 	}
 }

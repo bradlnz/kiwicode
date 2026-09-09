@@ -133,8 +133,61 @@ buffer, and indexed project types/interfaces, starting with one letter (for exam
 `private readonly I` in C#). Object access such as `service.` shows members.
 Use **Up/Down** to select, **Tab/Enter** to accept, or **Escape** to dismiss and
 continue editing. Completion also works before punctuation and uses unsaved open
-files when building the project index; external SDK types require language-server
-support and are not generally indexed.
+files when building the project index. With an installed language server, the
+dropdown uses its property/method completions and type details, including SDK and
+dependency types. See [Language intelligence](#language-intelligence) for setup.
+
+### Language intelligence
+
+Syntax highlighting works without extra tools. KiwiCode automatically uses these
+language servers when their executables are on `PATH`:
+
+| Languages | Server command | Configuration key |
+| --- | --- | --- |
+| Go | `gopls` | `go` |
+| C# | `csharp-ls` | `csharp` |
+| TypeScript, JavaScript, TSX, JSX | `typescript-language-server --stdio` | `typescript` |
+| Python | `pyright-langserver --stdio` | `python` |
+| Rust | `rust-analyzer` | `rust` |
+| C, C++ | `clangd` | `cpp` |
+| Java | `jdtls` | `java` |
+| Ruby | `ruby-lsp` | `ruby` |
+| PHP | `intelephense --stdio` | `php` |
+| HTML | `vscode-html-language-server --stdio` | `html` |
+| CSS, SCSS, Less | `vscode-css-language-server --stdio` | `css` |
+| JSON | `vscode-json-language-server --stdio` | `json` |
+| YAML | `yaml-language-server --stdio` | `yaml` |
+| Shell | `bash-language-server start` | `shellscript` |
+
+Install the server and language toolchain separately, then restart KiwiCode.
+Servers start in the project root and use their usual project setup (for example,
+a C/C++ compilation database or a C# solution/project).
+
+Servers provide completion, **Ctrl+D** definitions, and **Edit > Symbol Info**
+for types, signatures, and documentation. Completion synchronizes unsaved open
+files and applies replacement ranges and import edits in a single undo step.
+The existing syntax-based suggestions and definitions remain the fallback when
+a server is unavailable. Servers stay alive across cached workspace switches and
+stop on workspace eviction or editor exit.
+
+Override commands in global or project configuration using JSON argument arrays;
+commands execute directly, without a shell. Use `off` to disable a server:
+
+```yaml
+language_servers:
+  go: ["gopls"]
+  python: ["basedpyright-langserver", "--stdio"]
+  csharp: off
+shortcuts:
+  symbol_info: ctrl+y
+```
+
+Custom stdio servers can also be configured for `kotlin`, `swift`, and `fsharp`.
+This initial client implements the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/)
+for completion, definitions, and hover information. Diagnostics, refactoring,
+snippet placeholders, and completion commands are not implemented. A disconnected
+or timed-out server falls back to built-in suggestions; restart KiwiCode to retry.
+
 
 ### Screenshots
 
@@ -241,10 +294,10 @@ eviction and are not restored after restart.
 | Test execution | [tests.go](src/tests.go) and [shell.go](src/shell.go): test discovery, runner selection, process control, and captured output. |
 
 File-tree updates use periodic scans rather than filesystem notifications; large
-scans can exceed the 500 ms interval. Completion, definitions, and dependency
-graphs use syntactic inference rather than language-server semantics. Complex
-expression chains, overload resolution, and exact extension-method scope are
-outside that model. Graph views are bounded to 400 files, 600 nodes, and 2,000
+scans can exceed the 500 ms interval. Completion and definitions use installed
+language servers, with syntactic inference as a fallback. Dependency graphs always
+use syntactic inference. Complex expression chains, overload resolution, and exact
+extension-method scope require a language server. Graph views are bounded to 400 files, 600 nodes, and 2,000
 links, with truncation reported in the UI.
 
 ### MCP interface
